@@ -8,6 +8,14 @@ dependencies = [
     "pyarrow",
 ]
 
+[build-system]
+requires = ["uv_build"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "lsst"
+module-root = "python"
+
 [tool.uv.sources]
 lsst-daf-butler = { git = "https://github.com/lsst/daf_butler" }
 
