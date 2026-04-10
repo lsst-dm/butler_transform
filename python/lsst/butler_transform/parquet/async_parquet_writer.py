@@ -23,7 +23,7 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.from collections.abc import Iterable
+# along with this program.  If not, see <http://www.gnu.org/licenses/>
 
 from __future__ import annotations
 
@@ -37,9 +37,21 @@ from pyarrow.parquet import ParquetWriter
 
 
 class AsyncParquetWriter(AbstractAsyncContextManager):
-    """Async wrapper around `pyarrow.parquet.ParquetWriter`."""
+    """Async wrapper around `pyarrow.parquet.ParquetWriter`.
 
-    def __init__(self, output_path: str | Path, schema: object, *, min_rows_per_write=0) -> None:
+    Parameters
+    ----------
+    output_path
+        Destination where parquet file will be written.
+    schema
+        `pyarrow` schema defining the columns in the output file.
+    min_rows_per_write, optional
+        Rows will be buffered until at least this number of rows are available
+        to write to the file.  This controls the minimum size of row groups
+        written to the output file.
+    """
+
+    def __init__(self, output_path: str | Path, schema: pyarrow.Schema, *, min_rows_per_write=0) -> None:
         self._output_path = output_path
         self._schema = schema
         self._writer: ParquetWriter | None = None
@@ -58,6 +70,7 @@ class AsyncParquetWriter(AbstractAsyncContextManager):
         await self.write_table(pyarrow.Table.from_batches([batch], schema=self._schema))
 
     async def write_table(self, table: pyarrow.Table) -> None:
+        """Append a table to the parquet file."""
         if self._writer is None:
             raise AssertionError("AsyncParquetWriter context was not entered.")
         self._pending_tables.append(table)
@@ -66,6 +79,7 @@ class AsyncParquetWriter(AbstractAsyncContextManager):
             await self.flush()
 
     async def flush(self) -> None:
+        """Write any rows buffered in memory to disk."""
         if self._writer is None:
             raise AssertionError("AsyncParquetWriter context was not entered.")
         if self._pending_tables:
