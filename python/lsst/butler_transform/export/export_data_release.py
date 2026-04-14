@@ -30,7 +30,10 @@ from __future__ import annotations
 from collections.abc import Iterable
 from pathlib import Path
 
-from anyio import create_task_group, to_thread
+from anyio import create_task_group, open_file, to_thread
+from pydantic import BaseModel
+
+from lsst.daf.butler import SerializedDimensionConfig
 
 from ..export.export_datasets import export_datasets
 from ..export.export_dimension_records import export_dimension_records
@@ -73,14 +76,31 @@ async def export_data_release(
         # memory and file handles) from being exhausted.
         limiter = TaskLimiter(_MAX_BUTLER_CONNECTIONS)
         async with create_task_group() as tg:
+            dimension_record_export_files: dict[str, str] = {}
             for el in dimensions.elements:
                 if el.has_own_table:
+                    filename = f"{el.name}.dimension.parquet"
+                    dimension_record_export_files[el.name] = filename
                     tg.start_soon(
                         limiter.limit,
-                        export_dimension_records(
-                            butler_pool, el, output_directory.joinpath(f"{el.name}.dimension.parquet")
-                        ),
+                        export_dimension_records(butler_pool, el, output_directory.joinpath(filename)),
                     )
 
             for dt in resolved_dataset_types:
                 tg.start_soon(limiter.limit, export_datasets(butler_pool, dt, collections, output_directory))
+
+        manifest = DataReleaseExportManifest(
+            universe=dimensions.dimensionConfig.to_simple(),
+            dimension_record_files=dimension_record_export_files,
+        )
+        async with await open_file(output_directory.joinpath("manifest.json"), "wb") as fh:
+            await fh.write(manifest.model_dump_json(indent=2).encode("utf-8"))
+
+
+class DataReleaseExportManifest(BaseModel):
+    universe: SerializedDimensionConfig
+    """`lsst.daf.butler.DimensionUniverse` configuration."""
+    dimension_record_files: dict[str, str]
+    """Mapping from dimension name to name of parquet file containing the
+    dimension records.
+    """
