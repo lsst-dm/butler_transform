@@ -49,6 +49,7 @@ DATASET_TYPES = (
     "standard_passband",
     # Provenance
     "*_metadata",
+    "run_provenance",
 )
 
 COLLECTIONS = (
