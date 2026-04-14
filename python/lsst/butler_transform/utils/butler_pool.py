@@ -31,7 +31,8 @@ import asyncio
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 
-from anyio import CancelScope, to_thread
+from anyio import TASK_STATUS_IGNORED, CancelScope, to_thread
+from anyio.abc import TaskStatus
 
 from lsst.daf.butler import Butler
 
@@ -61,8 +62,10 @@ class ButlerPool:
 
     @staticmethod
     @asynccontextmanager
-    async def from_config(repo: str, max_connections: int) -> AsyncIterator[ButlerPool]:
-        root_butler = await to_thread.run_sync(Butler.from_config, repo)
+    async def from_config(
+        repo: str, max_connections: int, writeable: bool = False
+    ) -> AsyncIterator[ButlerPool]:
+        root_butler = await to_thread.run_sync(lambda: Butler.from_config(repo, writeable=writeable))
         try:
             pool = ButlerPool(root_butler, max_connections)
             yield pool
@@ -84,9 +87,12 @@ class ButlerPool:
             finally:
                 self._butlers.append(butler)
 
-    async def run_with_butler[T](self, func: Callable[[Butler], T]) -> T:
+    async def run_with_butler[T](
+        self, func: Callable[[Butler], T], *, task_status: TaskStatus = TASK_STATUS_IGNORED
+    ) -> T:
         """Wait until a `lsst.daf.Butler` instance is available, then run the
         given function in a thread.
         """
         async with self.get_butler() as butler:
+            task_status.started()
             return await to_thread.run_sync(func, butler)

@@ -23,7 +23,7 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.from collections.abc import Iterable
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 from __future__ import annotations
 
@@ -32,8 +32,6 @@ from pathlib import Path
 
 from anyio import create_task_group, open_file, to_thread
 from pydantic import BaseModel
-
-from lsst.daf.butler import SerializedDimensionConfig
 
 from ..export.export_datasets import export_datasets
 from ..export.export_dimension_records import export_dimension_records
@@ -90,7 +88,7 @@ async def export_data_release(
                 tg.start_soon(limiter.limit, export_datasets(butler_pool, dt, collections, output_directory))
 
         manifest = DataReleaseExportManifest(
-            universe=dimensions.dimensionConfig.to_simple(),
+            dimension_config=dimensions.dimensionConfig.dump(),
             dimension_record_files=dimension_record_export_files,
         )
         async with await open_file(output_directory.joinpath("manifest.json"), "wb") as fh:
@@ -98,8 +96,10 @@ async def export_data_release(
 
 
 class DataReleaseExportManifest(BaseModel):
-    universe: SerializedDimensionConfig
-    """`lsst.daf.butler.DimensionUniverse` configuration."""
+    """Top-level manifest for a data release export dump."""
+
+    dimension_config: str
+    """`lsst.daf.butler.DimensionConfig` configuration file."""
     dimension_record_files: dict[str, str]
     """Mapping from dimension name to name of parquet file containing the
     dimension records.
