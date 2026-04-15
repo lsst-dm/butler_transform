@@ -46,9 +46,11 @@ def import_dp2(export_directory: str, database_uri: str, schema: str | None) -> 
         config["registry", "db"] = database_uri
         if schema is not None:
             config["registry", "namespace"] = schema
-        Butler.makeRepo(butler_repo, config, dimensionConfig=import_info.get_dimension_config())
+        repo_config = Butler.makeRepo(butler_repo, config, dimensionConfig=import_info.get_dimension_config())
 
         asyncio.run(import_data_release(butler_repo, import_info))
+
+        print(repo_config.dump())
 
 
 if __name__ == "__main__":
