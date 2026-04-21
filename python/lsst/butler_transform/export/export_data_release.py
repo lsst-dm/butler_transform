@@ -33,6 +33,7 @@ from pathlib import Path
 from anyio import create_task_group, to_thread
 
 from ..export.export_datasets import export_datasets
+from ..export.export_dimension_records import export_dimension_records
 from ..utils.butler_pool import ButlerPool
 from ..utils.task_limiter import TaskLimiter
 
@@ -65,10 +66,21 @@ async def export_data_release(
         if missing_dataset_types:
             raise RuntimeError(f"Required dataset types not present in repository: {missing_dataset_types}")
 
+        dimensions = await butler_pool.run_with_butler(lambda butler: butler.dimensions)
+
         # Each individual export task should saturate at least one Butler
         # connection, so limit the concurrency to prevent other resources (e.g.
         # memory and file handles) from being exhausted.
         limiter = TaskLimiter(_MAX_BUTLER_CONNECTIONS)
         async with create_task_group() as tg:
+            for el in dimensions.elements:
+                if el.has_own_table:
+                    tg.start_soon(
+                        limiter.limit,
+                        export_dimension_records(
+                            butler_pool, el, output_directory.joinpath(f"{el.name}.dimension.parquet")
+                        ),
+                    )
+
             for dt in resolved_dataset_types:
                 tg.start_soon(limiter.limit, export_datasets(butler_pool, dt, collections, output_directory))

@@ -120,6 +120,38 @@ class TestDatasetExport(unittest.TestCase):
             dt3_datastore = read_table(tmpdir_path.joinpath("dt3.datastore.parquet")).to_pylist()
             self.assertEqual(len(dt3_datastore), 0)
 
+            # Check export of int and string values for dimension
+            # records.
+            instrument_records = read_table(tmpdir_path.joinpath("instrument.dimension.parquet")).to_pylist()
+            self.assertEqual(len(instrument_records), 1)
+            self.assertEqual(instrument_records[0]["name"], "LSSTCam")
+            self.assertEqual(instrument_records[0]["visit_max"], 6050123199999)
+            self.assertEqual(instrument_records[0]["visit_system"], 2)
+            self.assertEqual(instrument_records[0]["exposure_max"], 6050123199999)
+            self.assertEqual(instrument_records[0]["detector_max"], 1000)
+            self.assertEqual(instrument_records[0]["class_name"], "lsst.obs.lsst.LsstCam")
+
+            # Check export of time values in dimension records.
+            dayobs_records = read_table(tmpdir_path.joinpath("day_obs.dimension.parquet")).to_pylist()
+            self.assertEqual(len(dayobs_records), 1)
+            self.assertEqual(dayobs_records[0]["instrument"], "LSSTCam")
+            self.assertEqual(dayobs_records[0]["id"], 20251202)
+            self.assertEqual(dayobs_records[0]["timespan"].nsec[0], 1764676800000000000)
+            self.assertEqual(dayobs_records[0]["timespan"].nsec[1], 1764763200000000000)
+
+            # Check export of regions in dimension records.
+            visit_detector_regions = read_table(
+                tmpdir_path.joinpath("visit_detector_region.dimension.parquet")
+            ).to_pylist()
+            records = [
+                x for x in visit_detector_regions if x["detector"] == 10 and x["visit"] == 2025120200439
+            ]
+            self.assertEqual(len(records), 1)
+            region = bytes.fromhex(
+                "70aec07aff7aa1c9bfa3fd86c15619e63fbc3e491b343de6bf044adf7d4116cabfc67e3cb2bc23e63ffccfb0fc572ae6bfcc8d75f09fc6c9bf028d3797543be63faedbfdf98518e6bf0d0ea2dbce51c9bf8d5d2fb5ed30e63fc2eb4fce632be6bf"
+            )
+            self.assertEqual(records[0]["region"].encode(), region)
+
     def _get_absolute_datastore_path(self, relative_path: str) -> ResourcePath:
         """Given a relative path, return the absolute path to the file under
         the source Butler's datastore root.
