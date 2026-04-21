@@ -32,7 +32,7 @@ import pyarrow
 
 from lsst.daf.butler import DimensionElement, DimensionRecordTable
 
-from .async_parquet_reader import read_parquet_async
+from .async_parquet_reader import AsyncParquetReader
 from .async_parquet_writer import AsyncParquetWriter
 
 
@@ -57,6 +57,7 @@ async def read_dimension_records_from_parquet(
     """Load `lsst.daf.butler.DimensionRecord` rows from a parquet file."""
 
     schema = DimensionRecordTable.make_arrow_schema(dimension)
-    async for batch in read_parquet_async(input_file, batch_size=batch_size):
-        table = pyarrow.Table.from_batches([batch], schema=schema)
-        yield DimensionRecordTable(dimension, table=table)
+    async with AsyncParquetReader.create(input_file) as reader:
+        async for batch in reader.iter_batches(batch_size=batch_size):
+            table = pyarrow.Table.from_batches([batch], schema=schema)
+            yield DimensionRecordTable(dimension, table=table)

@@ -34,7 +34,7 @@ import pyarrow
 
 from lsst.daf.butler import DatasetId, DatasetRef, DatasetType, DimensionGroup
 
-from .async_parquet_reader import read_parquet_async
+from .async_parquet_reader import AsyncParquetReader
 from .async_parquet_writer import AsyncParquetWriter
 
 
@@ -54,8 +54,9 @@ class DatasetsParquetWriter(AsyncParquetWriter):
 async def read_dataset_ids(input_file: str | Path) -> AsyncIterator[list[DatasetId]]:
     """Read lists of dataset UUIDs from a dataset parquet file."""
     column_name = "dataset_id"
-    async for batch in read_parquet_async(input_file, batch_size=50000, columns=[column_name]):
-        yield [_convert_parquet_uuid_to_dataset_id(id.as_py()) for id in batch.column(column_name)]
+    async with AsyncParquetReader.create(input_file) as reader:
+        async for batch in reader.iter_batches(batch_size=50000, columns=[column_name]):
+            yield [_convert_parquet_uuid_to_dataset_id(id.as_py()) for id in batch.column(column_name)]
 
 
 def _convert_ref_to_row(ref: DatasetRef) -> dict[str, object]:
