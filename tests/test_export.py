@@ -35,6 +35,7 @@ from pathlib import Path
 from pyarrow.parquet import read_table
 
 from lsst.butler_transform.export.export_data_release import export_data_release
+from lsst.butler_transform.importer.import_data_release import DataReleaseImportInfo, import_data_release
 from lsst.daf.butler import Butler, DatasetType
 from lsst.resources import ResourcePath
 
@@ -151,6 +152,18 @@ class TestDatasetExport(unittest.TestCase):
                 "70aec07aff7aa1c9bfa3fd86c15619e63fbc3e491b343de6bf044adf7d4116cabfc67e3cb2bc23e63ffccfb0fc572ae6bfcc8d75f09fc6c9bf028d3797543be63faedbfdf98518e6bf0d0ea2dbce51c9bf8d5d2fb5ed30e63fc2eb4fce632be6bf"
             )
             self.assertEqual(records[0]["region"].encode(), region)
+
+            # Import to a new repo and make sure it round-trips.
+            import_repo = self.enterContext(tempfile.TemporaryDirectory())
+            Butler.makeRepo(import_repo)
+            asyncio.run(import_data_release(import_repo, DataReleaseImportInfo(tmpdir_path)))
+            with Butler.from_config(import_repo) as import_butler:
+                for dimension in butler.dimensions.elements:
+                    if dimension.has_own_table:
+                        self.assertCountEqual(
+                            butler.query_dimension_records(dimension.name, explain=False),
+                            import_butler.query_dimension_records(dimension.name, explain=False),
+                        )
 
     def _get_absolute_datastore_path(self, relative_path: str) -> ResourcePath:
         """Given a relative path, return the absolute path to the file under

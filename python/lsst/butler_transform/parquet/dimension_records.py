@@ -25,10 +25,14 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>
 
+from collections.abc import AsyncIterator
 from pathlib import Path
+
+import pyarrow
 
 from lsst.daf.butler import DimensionElement, DimensionRecordTable
 
+from .async_parquet_reader import read_parquet_async
 from .async_parquet_writer import AsyncParquetWriter
 
 
@@ -45,3 +49,14 @@ class DimensionRecordParquetWriter(AsyncParquetWriter):
             "Dimension records to write should be same as dimensions from writer constructor."
         )
         await self.write_table(table.to_arrow())
+
+
+async def read_dimension_records_from_parquet(
+    dimension: DimensionElement, input_file: Path | str, batch_size=50_000
+) -> AsyncIterator[DimensionRecordTable]:
+    """Load `lsst.daf.butler.DimensionRecord` rows from a parquet file."""
+
+    schema = DimensionRecordTable.make_arrow_schema(dimension)
+    async for batch in read_parquet_async(input_file, batch_size=batch_size):
+        table = pyarrow.Table.from_batches([batch], schema=schema)
+        yield DimensionRecordTable(dimension, table=table)
