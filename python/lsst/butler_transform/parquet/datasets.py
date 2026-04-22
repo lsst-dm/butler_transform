@@ -58,6 +58,14 @@ async def read_dataset_ids(input_file: str | Path) -> AsyncIterator[list[Dataset
             yield [_convert_parquet_uuid_to_dataset_id(id.as_py()) for id in batch.column(column_name)]
 
 
+async def read_dataset_refs(
+    dataset_type: DatasetType, input_file: str | Path
+) -> AsyncIterator[DatasetRefTable]:
+    async with AsyncParquetReader.create(input_file) as reader:
+        async for batch in reader.iter_batches(batch_size=50000):
+            yield DatasetRefTable(dataset_type, batch)
+
+
 class DatasetRefTable:
     def __init__(self, dataset_type: DatasetType, table: pyarrow.Table) -> None:
         self.dataset_type = dataset_type

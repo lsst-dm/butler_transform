@@ -28,7 +28,7 @@
 from asyncio import Event
 from collections.abc import Iterable
 
-from lsst.daf.butler import DimensionElement
+from lsst.daf.butler import DimensionElement, DimensionGroup, DimensionUniverse
 
 
 class DimensionDependencyTracker:
@@ -36,8 +36,8 @@ class DimensionDependencyTracker:
     until all of their required dimensions have been imported.
     """
 
-    def __init__(self, dimensions: Iterable[DimensionElement]) -> None:
-        dimensions = list(dimensions)
+    def __init__(self, universe: DimensionUniverse, dimensions: Iterable[DimensionElement]) -> None:
+        self._universe = universe
         # Tracks whether a given dimension has been imported yet.
         # Each key is a dimension name.
         self._events: dict[str, Event] = {}
@@ -51,13 +51,23 @@ class DimensionDependencyTracker:
         """
         # Need to wait for both "required" and "implied" dimensions here --
         # the dimension record tables have foreign keys for both.
-        for dep in dimension.dimensions:
-            if (view := dep.viewOf) is not None:
+        await self._wait_dimensions(dimension.dimensions.names, skip=dimension.name)
+
+    async def wait_until_required_dimensions_complete(self, dimensions: DimensionGroup) -> None:
+        """Wait until all "required" dimensions of the given list of dimensions
+        have been imported.
+        """
+        await self._wait_dimensions(dimensions.required)
+
+    async def _wait_dimensions(self, dimensions: Iterable[str], skip: str | None = None) -> None:
+        for dim in dimensions:
+            el = self._universe[dim]
+            if (view := el.viewOf) is not None:
                 name = view
             else:
-                name = dep.name
+                name = el.name
 
-            if name != dimension.name:
+            if name in self._events and name != skip:
                 await self._events[name].wait()
 
     def mark_complete(self, dimension: DimensionElement) -> None:

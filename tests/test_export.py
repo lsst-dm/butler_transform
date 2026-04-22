@@ -198,6 +198,13 @@ class TestDatasetExport(unittest.TestCase):
                     import_butler.collections.query_info("*", include_doc=True),
                 )
 
+                for dataset_type in ["dt1", "dt2", "dt3"]:
+                    self.assertEqual(
+                        import_butler.get_dataset_type(dataset_type), butler.get_dataset_type(dataset_type)
+                    )
+                for ref in [ref1, ref2, ref3]:
+                    self.assertEqual(import_butler.get_dataset(ref.id), ref)
+
     def _get_absolute_datastore_path(self, relative_path: str) -> ResourcePath:
         """Given a relative path, return the absolute path to the file under
         the source Butler's datastore root.

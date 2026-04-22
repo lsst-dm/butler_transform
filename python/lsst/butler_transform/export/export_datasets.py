@@ -51,7 +51,8 @@ async def export_datasets(
     butler_pool: ButlerPool,
     dataset_type: DatasetType,
     collections: Iterable[str],
-    output_directory: Path,
+    dataset_path: Path,
+    datastore_path: Path,
     run_collection_callback: Callable[[Iterable[str]], None],
 ) -> None:
     """Export datasets of the given type to two parquet files:
@@ -60,7 +61,6 @@ async def export_datasets(
     2. A "datastore" file containing the same information as
        `lsst.daf.butler.datastore.stored_file_info.StoredFileInfo`.
     """
-    dataset_path = output_directory.joinpath(f"{dataset_type.name}.datasets.parquet")
 
     dataset_ref_send, dataset_ref_recv = create_memory_object_stream[DatasetRefTable](2)
 
@@ -90,8 +90,7 @@ async def export_datasets(
         )
 
         # Write the datastore records to parquet
-        datastore_parquet_path = Path(output_directory).joinpath(f"{dataset_type.name}.datastore.parquet")
-        tg.start_soon(_write_datastore_records, datastore_parquet_path, datastore_records_recv)
+        tg.start_soon(_write_datastore_records, datastore_path, datastore_records_recv)
 
     print(f"{dataset_type.name}: complete")
 
