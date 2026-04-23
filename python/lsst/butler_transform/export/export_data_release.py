@@ -33,8 +33,11 @@ from pathlib import Path
 from anyio import create_task_group, open_file, to_thread
 from pydantic import BaseModel
 
+from lsst.daf.butler import CollectionType
+
 from ..export.export_datasets import export_datasets
 from ..export.export_dimension_records import export_dimension_records
+from ..parquet.collections import CollectionsParquetWriter
 from ..utils.butler_pool import ButlerPool
 from ..utils.task_limiter import TaskLimiter
 
@@ -69,6 +72,15 @@ async def export_data_release(
 
         dimensions = await butler_pool.run_with_butler(lambda butler: butler.dimensions)
 
+        # Snapshot the set of collections that we will be querying against.
+        resolved_collections = await butler_pool.run_with_butler(
+            lambda butler: butler.collections.query_info(
+                collections, include_chains=True, flatten_chains=True, include_doc=True
+            )
+        )
+        # Drop chained collections to get only the concrete collections we will search for.
+        search_collections = [c.name for c in resolved_collections if c.type != CollectionType.CHAINED]
+
         # Each individual export task should saturate at least one Butler
         # connection, so limit the concurrency to prevent other resources (e.g.
         # memory and file handles) from being exhausted.
@@ -85,9 +97,18 @@ async def export_data_release(
                     )
 
             for dt in resolved_dataset_types:
-                tg.start_soon(limiter.limit, export_datasets(butler_pool, dt, collections, output_directory))
+                tg.start_soon(
+                    limiter.limit, export_datasets(butler_pool, dt, search_collections, output_directory)
+                )
+
+        collection_filename = "collections.parquet"
+        async with CollectionsParquetWriter(
+            output_directory.joinpath(collection_filename)
+        ) as collection_writer:
+            await collection_writer.write(resolved_collections)
 
         manifest = DataReleaseExportManifest(
+            collection_export_file=collection_filename,
             dimension_config=dimensions.dimensionConfig.dump(),
             dimension_record_files=dimension_record_export_files,
         )
@@ -98,6 +119,8 @@ async def export_data_release(
 class DataReleaseExportManifest(BaseModel):
     """Top-level manifest for a data release export dump."""
 
+    collection_export_file: str
+    """Path to Parquet file containing collection information."""
     dimension_config: str
     """`lsst.daf.butler.DimensionConfig` configuration file."""
     dimension_record_files: dict[str, str]

@@ -152,6 +152,14 @@ class TestDatasetExport(unittest.TestCase):
                 "70aec07aff7aa1c9bfa3fd86c15619e63fbc3e491b343de6bf044adf7d4116cabfc67e3cb2bc23e63ffccfb0fc572ae6bfcc8d75f09fc6c9bf028d3797543be63faedbfdf98518e6bf0d0ea2dbce51c9bf8d5d2fb5ed30e63fc2eb4fce632be6bf"
             )
             self.assertEqual(records[0]["region"].encode(), region)
+            # Check export of collections.
+            collection_table = read_table(tmpdir_path.joinpath("collections.parquet")).to_pylist()
+            collection_table.sort(key=lambda c: c["name"])
+            self.assertEqual(len(collection_table), 1)
+            self.assertEqual(collection_table[0]["name"], "runs/abc")
+            self.assertEqual(collection_table[0]["type"], 1)
+            self.assertEqual(collection_table[0]["doc"], "")
+            self.assertEqual(collection_table[0]["children"], [])
 
             # Import to a new repo and make sure it round-trips.
             import_repo = self.enterContext(tempfile.TemporaryDirectory())
