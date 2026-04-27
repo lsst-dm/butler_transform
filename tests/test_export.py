@@ -193,6 +193,10 @@ class TestDatasetExport(unittest.TestCase):
                             butler.query_dimension_records(dimension.name, explain=False),
                             import_butler.query_dimension_records(dimension.name, explain=False),
                         )
+                self.assertCountEqual(
+                    butler.collections.query_info("*", include_doc=True),
+                    import_butler.collections.query_info("*", include_doc=True),
+                )
 
     def _get_absolute_datastore_path(self, relative_path: str) -> ResourcePath:
         """Given a relative path, return the absolute path to the file under

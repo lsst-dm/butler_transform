@@ -25,8 +25,13 @@ class DataReleaseImportProgressDisplay:
         self._dimension_progress = NestedProgressDisplay(
             "Dimension record import", self._progress_columns(), self._progress_columns()
         )
-
         self._top_level.add(self._dimension_progress.get_renderable())
+
+        self._collection_progress = Progress(
+            TextColumn("Collection import"), BarColumn(), TimeElapsedColumn()
+        )
+        self._collection_task = self._collection_progress.add_task("Collection import", total=None)
+        self._top_level.add(self._collection_progress)
 
     def _progress_columns(self) -> list[ProgressColumn]:
         return [
@@ -50,6 +55,9 @@ class DataReleaseImportProgressDisplay:
                 completed=child_progress.completed_rows,
                 visible=child_progress.status != "complete",
             )
+
+    def mark_collection_import_complete(self) -> None:
+        self._collection_progress.update(self._collection_task, total=1, completed=1)
 
 
 class NestedProgressDisplay:
