@@ -39,6 +39,8 @@ from ..utils.sync_iterators import convert_sync_iterator_to_async
 
 
 class AsyncParquetReader:
+    """Wraps `pyarrow.ParquetFile` for use with asyncio.."""
+
     def __init__(self, reader: ParquetFile) -> None:
         self._reader = reader
 
@@ -55,6 +57,7 @@ class AsyncParquetReader:
     async def iter_batches(
         self, *, batch_size: int = 10000, columns: list[str] | None = None
     ) -> AsyncIterator[pyarrow.RecordBatch]:
+        """Iterate over the parquet file in batches of rows."""
         iterator = await to_thread.run_sync(
             lambda: self._reader.iter_batches(batch_size=batch_size, columns=columns)
         )
@@ -62,5 +65,6 @@ class AsyncParquetReader:
             yield batch
 
     async def get_row_count(self) -> int:
+        """Return the total num of rows contained in the parquet file."""
         metadata = await to_thread.run_sync(lambda: self._reader.metadata)
         return metadata.num_rows

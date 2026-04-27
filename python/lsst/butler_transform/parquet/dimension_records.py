@@ -25,7 +25,10 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>
 
+from __future__ import annotations
+
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pyarrow
@@ -51,13 +54,26 @@ class DimensionRecordParquetWriter(AsyncParquetWriter):
         await self.write_table(table.to_arrow())
 
 
-async def read_dimension_records_from_parquet(
-    dimension: DimensionElement, input_file: Path | str, batch_size=50_000
-) -> AsyncIterator[DimensionRecordTable]:
-    """Load `lsst.daf.butler.DimensionRecord` rows from a parquet file."""
+class DimensionRecordParquetReader:
+    """Reads `lsst.daf.butler.DimensionRecord` rows from a parquet file."""
 
-    schema = DimensionRecordTable.make_arrow_schema(dimension)
-    async with AsyncParquetReader.create(input_file) as reader:
-        async for batch in reader.iter_batches(batch_size=batch_size):
+    def __init__(self, reader: AsyncParquetReader, dimension: DimensionElement) -> None:
+        self._reader = reader
+        self._dimension = dimension
+
+    @asynccontextmanager
+    @staticmethod
+    async def create(
+        input_file: Path | str, dimension: DimensionElement
+    ) -> AsyncIterator[DimensionRecordParquetReader]:
+        async with AsyncParquetReader.create(input_file) as reader:
+            yield DimensionRecordParquetReader(reader, dimension)
+
+    async def read(self, *, batch_size: int = 50_000) -> AsyncIterator[DimensionRecordTable]:
+        schema = DimensionRecordTable.make_arrow_schema(self._dimension)
+        async for batch in self._reader.iter_batches(batch_size=batch_size):
             table = pyarrow.Table.from_batches([batch], schema=schema)
-            yield DimensionRecordTable(dimension, table=table)
+            yield DimensionRecordTable(self._dimension, table=table)
+
+    async def get_row_count(self) -> int:
+        return await self._reader.get_row_count()

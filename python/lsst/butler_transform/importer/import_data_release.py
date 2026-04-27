@@ -27,11 +27,14 @@
 
 from pathlib import Path
 
-from lsst.butler_transform.importer.import_dimension_records import import_dimension_records
+from lsst.butler_transform.importer.import_dimension_records import (
+    DimensionRecordImporter,
+)
 from lsst.daf.butler import Config, DimensionConfig, DimensionElement, DimensionUniverse
 
 from ..export.export_data_release import DataReleaseExportManifest
 from ..utils.butler_pool import ButlerPool
+from ._progress import DataReleaseImportProgressDisplay
 
 _MAX_BUTLER_CONNECTIONS = 32
 
@@ -68,4 +71,9 @@ async def import_data_release(butler_repo: str, import_info: DataReleaseImportIn
     an object containing the top-level metadata from an export dump.
     """
     async with ButlerPool.from_config(butler_repo, _MAX_BUTLER_CONNECTIONS, writeable=True) as butler_pool:
-        await import_dimension_records(butler_pool, import_info.get_dimension_record_inputs())
+        with DataReleaseImportProgressDisplay().run() as progress:
+            await DimensionRecordImporter(
+                butler_pool,
+                import_info.get_dimension_record_inputs(),
+                progress.update_dimension_record_progress,
+            ).import_()
