@@ -27,7 +27,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterable
+from collections.abc import Callable, Iterable
 from itertools import batched
 from pathlib import Path
 
@@ -38,10 +38,10 @@ from anyio import (
 )
 from anyio.abc import ObjectReceiveStream, ObjectSendStream, TaskStatus
 
-from lsst.daf.butler import Butler, DatasetId, DatasetRef, DatasetType
+from lsst.daf.butler import Butler, DatasetId, DatasetType
 from lsst.daf.butler.registry.interfaces import FakeDatasetRef
 
-from ..parquet.datasets import DatasetsParquetWriter, read_dataset_ids
+from ..parquet.datasets import DatasetRefTable, DatasetsParquetWriter, read_dataset_ids
 from ..parquet.datastore import ButlerDatastoreRecords, DatastoreParquetWriter
 from ..utils.butler_pool import ButlerPool
 from ..utils.sync_send_stream import SyncSendStream
@@ -52,6 +52,7 @@ async def export_datasets(
     dataset_type: DatasetType,
     collections: Iterable[str],
     output_directory: Path,
+    run_collection_callback: Callable[[Iterable[str]], None],
 ) -> None:
     """Export datasets of the given type to two parquet files:
     1. A "datasets" file containing the same information as non-expanded
@@ -61,7 +62,7 @@ async def export_datasets(
     """
     dataset_path = output_directory.joinpath(f"{dataset_type.name}.datasets.parquet")
 
-    dataset_ref_send, dataset_ref_recv = create_memory_object_stream[Collection[DatasetRef]](2)
+    dataset_ref_send, dataset_ref_recv = create_memory_object_stream[DatasetRefTable](2)
 
     # Export dataset refs to parquet.
     async with create_task_group() as tg:
@@ -71,7 +72,9 @@ async def export_datasets(
                 SyncSendStream(dataset_ref_send), butler, dataset_type, collections
             ),
         )
-        tg.start_soon(_write_datasets_to_parquet, dataset_ref_recv, dataset_type, dataset_path)
+        tg.start_soon(
+            _write_datasets_to_parquet, dataset_ref_recv, dataset_type, dataset_path, run_collection_callback
+        )
 
     # Export datastore records to parquet.
     async with create_task_group() as tg:
@@ -94,7 +97,7 @@ async def export_datasets(
 
 
 def _query_datasets(
-    output: SyncSendStream[Collection[DatasetRef]],
+    output: SyncSendStream[DatasetRefTable],
     butler: Butler,
     dataset_type: DatasetType,
     collections: Iterable[str],
@@ -102,17 +105,19 @@ def _query_datasets(
     with output, butler.query() as query:
         results = query.datasets(dataset_type, collections, find_first=True)
         for batch in batched(results, 50_000):
-            output.send(batch)
+            output.send(DatasetRefTable.from_refs(dataset_type, batch))
 
 
 async def _write_datasets_to_parquet(
-    input: ObjectReceiveStream[Collection[DatasetRef]],
+    input: ObjectReceiveStream[DatasetRefTable],
     dataset_type: DatasetType,
     output_path: Path,
+    run_collection_callback: Callable[[Iterable[str]], None],
 ) -> None:
     async with input, DatasetsParquetWriter(output_path, dataset_type) as writer:
         async for refs in input:
-            print(f"{dataset_type}: {len(refs)} datasets")
+            print(f"{dataset_type}: {len(refs.table)} datasets")
+            run_collection_callback(refs.get_run_collections())
             await writer.add_refs(refs)
 
 

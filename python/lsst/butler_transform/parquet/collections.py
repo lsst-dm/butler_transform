@@ -53,7 +53,7 @@ class CollectionsParquetWriter(AsyncParquetWriter):
                 pyarrow.field("children", pyarrow.list_(pyarrow.string())),
             ]
         )
-        super().__init__(output_file, schema)
+        super().__init__(output_file, schema, min_rows_per_write=10_000)
 
     async def write(self, collections: Iterable[CollectionInfo]) -> None:
         batch = pyarrow.RecordBatch.from_pylist(

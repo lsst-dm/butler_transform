@@ -96,9 +96,16 @@ async def export_data_release(
                         export_dimension_records(butler_pool, el, output_directory.joinpath(filename)),
                     )
 
+            # Datasets found via tagged collections may reference run collections that are not present
+            # in the initial list of collections, so accumulate a list of all collections encountered
+            # during export.
+            run_collections_found: set[str] = set()
             for dt in resolved_dataset_types:
                 tg.start_soon(
-                    limiter.limit, export_datasets(butler_pool, dt, search_collections, output_directory)
+                    limiter.limit,
+                    export_datasets(
+                        butler_pool, dt, search_collections, output_directory, run_collections_found.update
+                    ),
                 )
 
         collection_filename = "collections.parquet"
@@ -106,6 +113,12 @@ async def export_data_release(
             output_directory.joinpath(collection_filename)
         ) as collection_writer:
             await collection_writer.write(resolved_collections)
+            extra_run_collections = run_collections_found - set([c.name for c in resolved_collections])
+            if extra_run_collections:
+                extra_collection_info = await butler_pool.run_with_butler(
+                    lambda butler: butler.collections.query_info(extra_run_collections, include_doc=True)
+                )
+                await collection_writer.write(extra_collection_info)
 
         manifest = DataReleaseExportManifest(
             collection_export_file=collection_filename,

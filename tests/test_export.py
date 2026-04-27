@@ -36,7 +36,7 @@ from pyarrow.parquet import read_table
 
 from lsst.butler_transform.export.export_data_release import export_data_release
 from lsst.butler_transform.importer.import_data_release import DataReleaseImportInfo, import_data_release
-from lsst.daf.butler import Butler, DatasetType
+from lsst.daf.butler import Butler, CollectionType, DatasetType
 from lsst.resources import ResourcePath
 
 
@@ -48,7 +48,11 @@ class TestDatasetExport(unittest.TestCase):
             butler.import_(filename="resource://lsst.daf.butler/tests/registry_data/lsstcam-subset.yaml")
 
     def test_dataset_release_export(self) -> None:
-        butler = self.enterContext(Butler.from_config(self.repo, writeable=True, run="runs/abc"))
+        butler: Butler = self.enterContext(Butler.from_config(self.repo, writeable=True, run="runs/abc"))
+        # Set up a second run collection and a tagged collection to use for
+        # testing collection export.
+        butler.collections.register("runs/def")
+        butler.collections.register("tag", CollectionType.TAGGED, doc="this is a collection")
         dt1 = DatasetType("dt1", ["instrument", "visit"], "int", universe=butler.dimensions)
         dt2 = DatasetType("dt2", ["instrument", "detector"], "int", universe=butler.dimensions)
         dt3 = DatasetType("dt3", ["instrument", "detector"], "int", universe=butler.dimensions)
@@ -57,13 +61,18 @@ class TestDatasetExport(unittest.TestCase):
         butler.registry.registerDatasetType(dt3)
 
         ref1 = butler.put(1, "dt1", {"instrument": "LSSTCam", "visit": 2025120200439})
-        ref2 = butler.put(20, "dt1", {"instrument": "LSSTCam", "visit": 2025120200440})
+        ref2 = butler.put(20, "dt1", {"instrument": "LSSTCam", "visit": 2025120200440}, run="runs/def")
+        butler.registry.associate("tag", [ref2])
         ref3 = butler.put(3, "dt2", {"instrument": "LSSTCam", "detector": 10})
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
-            # dt2 is passed as a glob to verify that we expand globs.
-            asyncio.run(export_data_release(tmpdir_path, self.repo, ["dt1", "d*2", "dt3"], ["runs/abc"]))
+            # dt2 is passed as a glob to verify that we expand globs.  We do
+            # not explicitly pass in the collection "runs/def", instead using a
+            # tagged collection to pull in "ref2".
+            asyncio.run(
+                export_data_release(tmpdir_path, self.repo, ["dt1", "d*2", "dt3"], ["runs/abc", "tag"])
+            )
 
             dt1_datasets = read_table(tmpdir_path.joinpath("dt1.datasets.parquet")).to_pylist()
             dt1_datasets.sort(key=lambda row: row["visit"])
@@ -73,7 +82,7 @@ class TestDatasetExport(unittest.TestCase):
             self.assertEqual(dt1_datasets[0]["instrument"], "LSSTCam")
             self.assertEqual(dt1_datasets[0]["visit"], 2025120200439)
             self.assertEqual(dt1_datasets[1]["dataset_id"], ref2.id.bytes)
-            self.assertEqual(dt1_datasets[1]["run"], "runs/abc")
+            self.assertEqual(dt1_datasets[1]["run"], "runs/def")
             self.assertEqual(dt1_datasets[1]["instrument"], "LSSTCam")
             self.assertEqual(dt1_datasets[1]["visit"], 2025120200440)
 
@@ -152,14 +161,26 @@ class TestDatasetExport(unittest.TestCase):
                 "70aec07aff7aa1c9bfa3fd86c15619e63fbc3e491b343de6bf044adf7d4116cabfc67e3cb2bc23e63ffccfb0fc572ae6bfcc8d75f09fc6c9bf028d3797543be63faedbfdf98518e6bf0d0ea2dbce51c9bf8d5d2fb5ed30e63fc2eb4fce632be6bf"
             )
             self.assertEqual(records[0]["region"].encode(), region)
+
             # Check export of collections.
             collection_table = read_table(tmpdir_path.joinpath("collections.parquet")).to_pylist()
             collection_table.sort(key=lambda c: c["name"])
-            self.assertEqual(len(collection_table), 1)
+            self.assertEqual(len(collection_table), 3)
             self.assertEqual(collection_table[0]["name"], "runs/abc")
             self.assertEqual(collection_table[0]["type"], 1)
             self.assertEqual(collection_table[0]["doc"], "")
             self.assertEqual(collection_table[0]["children"], [])
+            # runs/def was not given in the list of input collections, but it
+            # should have been pulled in because one of the datasets in the
+            # input tagged collection references it.
+            self.assertEqual(collection_table[1]["name"], "runs/def")
+            self.assertEqual(collection_table[1]["type"], 1)
+            self.assertEqual(collection_table[1]["doc"], "")
+            self.assertEqual(collection_table[1]["children"], [])
+            self.assertEqual(collection_table[2]["name"], "tag")
+            self.assertEqual(collection_table[2]["type"], 2)
+            self.assertEqual(collection_table[2]["doc"], "this is a collection")
+            self.assertEqual(collection_table[2]["children"], [])
 
             # Import to a new repo and make sure it round-trips.
             import_repo = self.enterContext(tempfile.TemporaryDirectory())
