@@ -27,6 +27,8 @@
 
 from pathlib import Path
 
+from anyio import create_task_group
+
 from lsst.butler_transform.importer.import_dimension_records import (
     DimensionRecordImporter,
 )
@@ -35,6 +37,7 @@ from lsst.daf.butler import Config, DimensionConfig, DimensionElement, Dimension
 from ..export.export_data_release import DataReleaseExportManifest
 from ..utils.butler_pool import ButlerPool
 from ._progress import DataReleaseImportProgressDisplay
+from .import_collections import import_collections
 
 _MAX_BUTLER_CONNECTIONS = 32
 
@@ -45,25 +48,34 @@ class DataReleaseImportInfo:
     """
 
     def __init__(self, export_directory: str | Path) -> None:
-        self._directory = Path(export_directory)
-        manifest_path = self._directory.joinpath("manifest.json")
-        self._manifest = DataReleaseExportManifest.model_validate_json(manifest_path.read_text())
-        self._universe = DimensionUniverse(self.get_dimension_config())
+        self._directory = Path(export_directory).resolve()
+        manifest_path = self._get_absolute_path("manifest.json")
+        self.manifest = DataReleaseExportManifest.model_validate_json(manifest_path.read_text())
+        self.universe = DimensionUniverse(self.get_dimension_config())
 
     def get_dimension_config(self) -> DimensionConfig:
         """Dimension universe configuration for the exported Butler
         repository.
         """
-        return DimensionConfig(Config.fromString(self._manifest.dimension_config))
+        return DimensionConfig(Config.fromString(self.manifest.dimension_config))
 
     def get_dimension_record_inputs(self) -> dict[DimensionElement, Path]:
         """Mapping from dimension to parquet file containing records for that
         dimension.
         """
         return {
-            self._universe[k]: self._directory.joinpath(v)
-            for k, v in self._manifest.dimension_record_files.items()
+            self.universe[k]: self._get_absolute_path(v)
+            for k, v in self.manifest.dimension_record_files.items()
         }
+
+    def get_collection_input(self) -> Path:
+        return self._get_absolute_path(self.manifest.collection_export_file)
+
+    def _get_absolute_path(self, suffix: str) -> Path:
+        path = self._directory.joinpath(suffix).resolve()
+        if self._directory not in path.parents:
+            raise ValueError(f"Path {path} escapes the directory we are importing from")
+        return path
 
 
 async def import_data_release(butler_repo: str, import_info: DataReleaseImportInfo) -> None:
@@ -72,8 +84,14 @@ async def import_data_release(butler_repo: str, import_info: DataReleaseImportIn
     """
     async with ButlerPool.from_config(butler_repo, _MAX_BUTLER_CONNECTIONS, writeable=True) as butler_pool:
         with DataReleaseImportProgressDisplay().run() as progress:
-            await DimensionRecordImporter(
-                butler_pool,
-                import_info.get_dimension_record_inputs(),
-                progress.update_dimension_record_progress,
-            ).import_()
+            async with create_task_group() as tg:
+                tg.start_soon(
+                    DimensionRecordImporter(
+                        butler_pool,
+                        import_info.get_dimension_record_inputs(),
+                        progress.update_dimension_record_progress,
+                    ).import_
+                )
+
+                await import_collections(butler_pool, import_info.get_collection_input())
+                progress.mark_collection_import_complete()

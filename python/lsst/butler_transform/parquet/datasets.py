@@ -28,6 +28,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterable
+from functools import cache
 from pathlib import Path
 
 import pyarrow
@@ -42,13 +43,11 @@ class DatasetsParquetWriter(AsyncParquetWriter):
     """Writes Butler `lsst.daf.butler.DatasetRef` instances to a parquet file."""
 
     def __init__(self, output_file: str | Path, dataset_type: DatasetType) -> None:
-        super().__init__(output_file, _create_dataset_arrow_schema(dataset_type, []))
+        super().__init__(output_file, _create_dataset_arrow_schema(dataset_type.dimensions))
 
-    async def add_refs(self, refs: Iterable[DatasetRef]) -> None:
+    async def add_refs(self, refs: DatasetRefTable) -> None:
         """Append a batch of datasets to the parquet file."""
-        rows = [_convert_ref_to_row(ref) for ref in refs]
-        batch = pyarrow.RecordBatch.from_pylist(rows, schema=self._schema)
-        await self.write_batch(batch)
+        await self.write_table(refs.table)
 
 
 async def read_dataset_ids(input_file: str | Path) -> AsyncIterator[list[DatasetId]]:
@@ -59,20 +58,43 @@ async def read_dataset_ids(input_file: str | Path) -> AsyncIterator[list[Dataset
             yield [_convert_parquet_uuid_to_dataset_id(id.as_py()) for id in batch.column(column_name)]
 
 
-def _convert_ref_to_row(ref: DatasetRef) -> dict[str, object]:
-    row: dict[str, object] = dict(ref.dataId.required)
-    row["dataset_id"] = ref.id.bytes
-    row["run"] = ref.run
-    return row
+class DatasetRefTable:
+    def __init__(self, dataset_type: DatasetType, table: pyarrow.Table) -> None:
+        self.dataset_type = dataset_type
+        self.table = table
+
+    @staticmethod
+    def from_refs(dataset_type: DatasetType, refs: Iterable[DatasetRef]) -> DatasetRefTable:
+        rows = [{**ref.dataId.required, "dataset_id": ref.id.bytes, "run": ref.run} for ref in refs]
+        table = pyarrow.Table.from_pylist(rows, schema=_create_dataset_arrow_schema(dataset_type.dimensions))
+        return DatasetRefTable(dataset_type, table)
+
+    def to_refs(self) -> list[DatasetRef]:
+        return [
+            DatasetRef(
+                self.dataset_type,
+                row,
+                row["run"],
+                id=_convert_parquet_uuid_to_dataset_id(row["dataset_id"]),
+            )
+            for row in self.table.to_pylist()
+        ]
+
+    def get_run_collections(self) -> list[str]:
+        """Returns the list of run collections referenced by the dataset refs
+        in this table.
+        """
+        return self.table.column("run").unique().to_pylist()
 
 
+@cache
 def _create_dataset_arrow_schema(
-    dataset_type: DatasetType, additional_columns: list[pyarrow.Field]
+    dimensions: DimensionGroup, additional_columns: tuple[pyarrow.Field, ...] = ()
 ) -> pyarrow.Schema:
     fields = [
         pyarrow.field("dataset_id", pyarrow.binary(16), nullable=False),
         pyarrow.field("run", pyarrow.dictionary(pyarrow.int32(), pyarrow.string()), nullable=False),
-        *_get_data_id_column_schemas(dataset_type.dimensions),
+        *_get_data_id_column_schemas(dimensions),
         *additional_columns,
     ]
     return pyarrow.schema(fields)

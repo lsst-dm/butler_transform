@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from typing import Unpack
 
 from anyio import TASK_STATUS_IGNORED, CancelScope, to_thread
 from anyio.abc import TaskStatus
@@ -87,12 +88,15 @@ class ButlerPool:
             finally:
                 self._butlers.append(butler)
 
-    async def run_with_butler[T](
-        self, func: Callable[[Butler], T], *, task_status: TaskStatus = TASK_STATUS_IGNORED
+    async def run_with_butler[*P, T](
+        self,
+        func: Callable[[Butler, *P], T],
+        *args: Unpack[P],
+        task_status: TaskStatus = TASK_STATUS_IGNORED,
     ) -> T:
         """Wait until a `lsst.daf.Butler` instance is available, then run the
         given function in a thread.
         """
         async with self.get_butler() as butler:
             task_status.started()
-            return await to_thread.run_sync(func, butler)
+            return await to_thread.run_sync(func, butler, *args)
