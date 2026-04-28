@@ -6,6 +6,7 @@ dependencies = [
     "anyio",
     "lsst-daf-butler",
     "pyarrow",
+    "rich>=15.0.0",
 ]
 
 [build-system]
