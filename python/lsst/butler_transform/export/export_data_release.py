@@ -38,7 +38,7 @@ from lsst.daf.butler import CollectionType, SerializedDatasetType
 from ..export.export_datasets import export_datasets
 from ..export.export_dimension_records import export_dimension_records
 from ..parquet.collections import CollectionsParquetWriter
-from ..utils.butler_pool import ButlerPool
+from ..utils.butler_thread_pool import ButlerThreadPool
 from ..utils.task_limiter import TaskLimiter
 
 _MAX_BUTLER_CONNECTIONS = 32
@@ -58,7 +58,7 @@ async def export_data_release(
     Path(output_directory).mkdir(exist_ok=True)
 
     async with (
-        ButlerPool.from_config(butler_repo, _MAX_BUTLER_CONNECTIONS) as butler_pool,
+        ButlerThreadPool.from_config(butler_repo, _MAX_BUTLER_CONNECTIONS) as butler_pool,
     ):
         missing_dataset_types: list[str] = []
         resolved_dataset_types = await butler_pool.run_with_butler(

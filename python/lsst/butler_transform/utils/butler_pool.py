@@ -27,76 +27,23 @@
 
 from __future__ import annotations
 
-import asyncio
-from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
-from typing import Unpack
+from collections.abc import Callable
+from typing import Protocol, Unpack
 
-from anyio import TASK_STATUS_IGNORED, CancelScope, to_thread
+from anyio import TASK_STATUS_IGNORED
 from anyio.abc import TaskStatus
 
 from lsst.daf.butler import Butler
 
 
-class ButlerPool:
-    """A fixed-size connection pool for `lsst.daf.Butler` instances, for use from
-    async functions.
-
-    Notes
-    -----
-    Use the ``from_config`` context manager instead of calling ``__init__``
-    directly.
-
-    All Butler instance functions block, so returned Butler instances should be
-    used in a separate thread, and not in the async event loop.
+class ButlerPool(Protocol):
+    """Interface definition for a connection pool of
+    `lsst.daf.Butler` instances for use from async functions.
     """
-
-    def __init__(self, butler: Butler, max_connections: int) -> None:
-        self._root_butler = butler
-        self._butlers: list[Butler] = []
-        self._semaphore = asyncio.BoundedSemaphore(max_connections)
-        self.max_connections = max_connections
-
-    def _close(self) -> None:
-        for butler in self._butlers:
-            butler.close()
-
-    @staticmethod
-    @asynccontextmanager
-    async def from_config(
-        repo: str, max_connections: int, writeable: bool = False
-    ) -> AsyncIterator[ButlerPool]:
-        root_butler = await to_thread.run_sync(lambda: Butler.from_config(repo, writeable=writeable))
-        try:
-            pool = ButlerPool(root_butler, max_connections)
-            yield pool
-        finally:
-            with CancelScope(shield=True):
-                await to_thread.run_sync(pool._close)
-                await to_thread.run_sync(root_butler.close)
-
-    @asynccontextmanager
-    async def get_butler(self) -> AsyncIterator[Butler]:
-        async with self._semaphore:
-            if self._butlers:
-                butler = self._butlers.pop()
-            else:
-                butler = await to_thread.run_sync(self._root_butler.clone)
-
-            try:
-                yield butler
-            finally:
-                self._butlers.append(butler)
 
     async def run_with_butler[*P, T](
         self,
         func: Callable[[Butler, *P], T],
         *args: Unpack[P],
         task_status: TaskStatus = TASK_STATUS_IGNORED,
-    ) -> T:
-        """Wait until a `lsst.daf.Butler` instance is available, then run the
-        given function in a thread.
-        """
-        async with self.get_butler() as butler:
-            task_status.started()
-            return await to_thread.run_sync(func, butler, *args)
+    ) -> T: ...
