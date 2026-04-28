@@ -22,15 +22,19 @@ class DataReleaseImportProgressDisplay:
     def __init__(self) -> None:
         self._top_level = Tree("Import data release")
 
-        columns = [
+        self._dimension_progress = NestedProgressDisplay(
+            "Dimension record import", self._progress_columns(), self._progress_columns()
+        )
+
+        self._top_level.add(self._dimension_progress.get_renderable())
+
+    def _progress_columns(self) -> list[ProgressColumn]:
+        return [
             TextColumn("{task.description}"),
             BarColumn(),
             MofNCompleteColumn(),
             TimeElapsedColumn(),
         ]
-        self._dimension_progress = NestedProgress("Dimension record import", columns)
-
-        self._top_level.add(self._dimension_progress.get_renderable())
 
     @contextmanager
     def run(self) -> Iterator[DataReleaseImportProgressDisplay]:
@@ -48,16 +52,18 @@ class DataReleaseImportProgressDisplay:
             )
 
 
-class NestedProgress:
+class NestedProgressDisplay:
+    """Displays a top-level progress bar representing a group of tasks, with
+    multiple progress bars nested under it representing the individual
+    tasks.
+    """
+
     def __init__(
         self,
         parent_label: str,
         parent_columns: Iterable[ProgressColumn],
-        child_columns: Iterable[ProgressColumn] | None = None,
+        child_columns: Iterable[ProgressColumn],
     ) -> None:
-        if child_columns is None:
-            child_columns = parent_columns
-
         self._parent = Progress(*parent_columns)
         self._parent_task = self._parent.add_task(parent_label, total=None)
         self._tree = Tree(self._parent)
