@@ -114,6 +114,7 @@ async def import_data_release(butler_repo: str, import_info: DataReleaseImportIn
             await butler_pool.run_with_butler(
                 _register_dataset_types, [input.dataset_type for input in dataset_inputs]
             )
+            progress.mark_dataset_type_complete()
 
             dimension_inputs = import_info.get_dimension_record_inputs()
             dimension_tracker = DimensionDependencyTracker(import_info.universe, dimension_inputs.keys())
