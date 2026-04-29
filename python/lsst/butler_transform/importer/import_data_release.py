@@ -106,11 +106,11 @@ async def import_data_release(butler_repo: str, import_info: DataReleaseImportIn
     an object containing the top-level metadata from an export dump.
     """
     async with ButlerPool.from_config(butler_repo, _MAX_BUTLER_CONNECTIONS, writeable=True) as butler_pool:
-        with DataReleaseImportProgressDisplay().run() as progress:
+        dataset_inputs = import_info.get_dataset_inputs()
+        with DataReleaseImportProgressDisplay(dataset_type_count=len(dataset_inputs)).run() as progress:
             # Registering dataset types creates tables and indexes, so do it first
             # to avoid thinking about what the locking implications might be if we
             # did it in parallel.
-            dataset_inputs = import_info.get_dataset_inputs()
             await butler_pool.run_with_butler(
                 _register_dataset_types, [input.dataset_type for input in dataset_inputs]
             )
@@ -137,7 +137,9 @@ async def import_data_release(butler_repo: str, import_info: DataReleaseImportIn
                 # Import datasets.
                 limiter = CapacityLimiter(_MAX_BUTLER_CONNECTIONS)
                 for ds in dataset_inputs:
-                    tg.start_soon(_import_datasets_when_ready, butler_pool, ds, limiter, dimension_tracker)
+                    tg.start_soon(
+                        _import_datasets_when_ready, butler_pool, ds, limiter, dimension_tracker, progress
+                    )
 
 
 def _register_dataset_types(butler: Butler, dataset_types: Iterable[DatasetType]) -> None:
@@ -150,7 +152,13 @@ async def _import_datasets_when_ready(
     info: DatasetImportInfo,
     limiter: CapacityLimiter,
     dimension_tracker: DimensionDependencyTracker,
+    progress_display: DataReleaseImportProgressDisplay,
 ) -> None:
     await dimension_tracker.wait_until_required_dimensions_complete(info.dataset_type.dimensions)
     async with limiter:
-        await import_datasets(butler_pool, info.dataset_type, info.dataset_export_file)
+        await import_datasets(
+            butler_pool,
+            info.dataset_type,
+            info.dataset_export_file,
+            progress_display.handle_dataset_import_event,
+        )

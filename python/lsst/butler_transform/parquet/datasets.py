@@ -28,6 +28,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterable
+from contextlib import asynccontextmanager
 from functools import cache
 from pathlib import Path
 
@@ -58,12 +59,27 @@ async def read_dataset_ids(input_file: str | Path) -> AsyncIterator[list[Dataset
             yield [_convert_parquet_uuid_to_dataset_id(id.as_py()) for id in batch.column(column_name)]
 
 
-async def read_dataset_refs(
-    dataset_type: DatasetType, input_file: str | Path
-) -> AsyncIterator[DatasetRefTable]:
-    async with AsyncParquetReader.create(input_file) as reader:
-        async for batch in reader.iter_batches(batch_size=50000):
-            yield DatasetRefTable(dataset_type, batch)
+class DatasetsParquetReader:
+    """Reads `lsst.daf.butler.DatasetRef` rows from a parquet file."""
+
+    def __init__(self, reader: AsyncParquetReader, dataset_type: DatasetType) -> None:
+        self._reader = reader
+        self._dataset_type = dataset_type
+
+    @asynccontextmanager
+    @staticmethod
+    async def create(
+        input_file: Path | str, dataset_type: DatasetType
+    ) -> AsyncIterator[DatasetsParquetReader]:
+        async with AsyncParquetReader.create(input_file) as reader:
+            yield DatasetsParquetReader(reader, dataset_type)
+
+    async def read(self, *, batch_size: int = 50_000) -> AsyncIterator[DatasetRefTable]:
+        async for batch in self._reader.iter_batches(batch_size=batch_size):
+            yield DatasetRefTable(self._dataset_type, batch)
+
+    async def get_row_count(self) -> int:
+        return await self._reader.get_row_count()
 
 
 class DatasetRefTable:
