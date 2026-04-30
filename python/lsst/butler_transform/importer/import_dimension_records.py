@@ -36,7 +36,7 @@ from typing import Literal
 from anyio import create_task_group
 from anyio.abc import TaskStatus
 
-from lsst.daf.butler import DimensionElement, DimensionRecordTable
+from lsst.daf.butler import Butler, DimensionElement, DimensionRecordTable
 
 from ..parquet.dimension_records import DimensionRecordParquetReader
 from ..utils.butler_pool import ButlerPool
@@ -123,11 +123,15 @@ class DimensionRecordImporter:
         self._progress_tracker.dimension_complete(dimension.name)
 
     async def _import_batch(self, batch: DimensionRecordTable, task_status: TaskStatus) -> None:
-        el = batch.element
+        dimension = batch.element.name
         await self._butler_pool.run_with_butler(
-            lambda butler: butler.registry.insertDimensionData(el, *tuple(batch)), task_status=task_status
+            _insert_dimension_records, dimension, batch, task_status=task_status
         )
-        self._progress_tracker.dimension_progress(el.name, len(batch))
+        self._progress_tracker.dimension_progress(dimension, len(batch))
+
+
+def _insert_dimension_records(butler: Butler, dimension: str, batch: DimensionRecordTable) -> None:
+    butler.registry.insertDimensionData(dimension, *tuple(batch))
 
 
 class _ImportProgressTracker:

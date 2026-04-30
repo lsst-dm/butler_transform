@@ -43,12 +43,12 @@ from lsst.daf.butler.registry.interfaces import FakeDatasetRef
 
 from ..parquet.datasets import DatasetRefTable, DatasetsParquetWriter, read_dataset_ids
 from ..parquet.datastore import ButlerDatastoreRecords, DatastoreParquetWriter
-from ..utils.butler_pool import ButlerPool
+from ..utils.butler_thread_pool import ButlerThreadPool
 from ..utils.sync_send_stream import SyncSendStream
 
 
 async def export_datasets(
-    butler_pool: ButlerPool,
+    butler_pool: ButlerThreadPool,
     dataset_type: DatasetType,
     collections: Iterable[str],
     dataset_path: Path,
@@ -121,7 +121,7 @@ async def _write_datasets_to_parquet(
 
 
 async def _fetch_datastore_records(
-    butler_pool: ButlerPool,
+    butler_pool: ButlerThreadPool,
     dataset_file: Path,
     output: ObjectSendStream[ButlerDatastoreRecords],
 ) -> None:
@@ -131,7 +131,7 @@ async def _fetch_datastore_records(
 
 
 async def _fetch_datastore_record_batch(
-    butler_pool: ButlerPool,
+    butler_pool: ButlerThreadPool,
     dataset_ids: Iterable[DatasetId],
     output: ObjectSendStream[ButlerDatastoreRecords],
     task_status: TaskStatus,

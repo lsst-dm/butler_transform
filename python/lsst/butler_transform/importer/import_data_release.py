@@ -41,6 +41,7 @@ from lsst.daf.butler import Butler, Config, DatasetType, DimensionConfig, Dimens
 
 from ..export.export_data_release import DataReleaseExportManifest
 from ..utils.butler_pool import ButlerPool
+from ..utils.butler_process_pool import ButlerProcessPool
 from ._progress import DataReleaseImportProgressDisplay
 from .dimension_dependencies import DimensionDependencyTracker
 from .import_collections import import_collections
@@ -105,7 +106,9 @@ async def import_data_release(butler_repo: str, import_info: DataReleaseImportIn
     """Import a set of data release parquet files to a Butler repository, given
     an object containing the top-level metadata from an export dump.
     """
-    async with ButlerPool.from_config(butler_repo, _MAX_BUTLER_CONNECTIONS, writeable=True) as butler_pool:
+    async with ButlerProcessPool.from_config(
+        butler_repo, _MAX_BUTLER_CONNECTIONS, writeable=True
+    ) as butler_pool:
         dataset_inputs = import_info.get_dataset_inputs()
         with DataReleaseImportProgressDisplay(dataset_type_count=len(dataset_inputs)).run() as progress:
             # Registering dataset types creates tables and indexes, so do it first
