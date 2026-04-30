@@ -84,11 +84,12 @@ class DimensionRecordImporter:
         self,
         butler_pool: ButlerPool,
         inputs: Mapping[DimensionElement, Path],
+        dimension_tracker: DimensionDependencyTracker,
         progress_callback: Callable[[DimensionRecordImportProgress], None] | None = None,
     ) -> None:
         self._butler_pool = butler_pool
         self._inputs = inputs
-        self._dimension_tracker = DimensionDependencyTracker(inputs.keys())
+        self._dimension_tracker = dimension_tracker
         self._progress_tracker = _ImportProgressTracker(progress_callback, len(inputs))
 
     async def import_(self) -> None:

@@ -33,7 +33,7 @@ from pathlib import Path
 from anyio import create_task_group, open_file, to_thread
 from pydantic import BaseModel
 
-from lsst.daf.butler import CollectionType
+from lsst.daf.butler import CollectionType, SerializedDatasetType
 
 from ..export.export_datasets import export_datasets
 from ..export.export_dimension_records import export_dimension_records
@@ -62,9 +62,11 @@ async def export_data_release(
     ):
         missing_dataset_types: list[str] = []
         resolved_dataset_types = await butler_pool.run_with_butler(
-            lambda butler: butler.registry.queryDatasetTypes(
-                dataset_types,
-                missing=missing_dataset_types,
+            lambda butler: tuple(
+                butler.registry.queryDatasetTypes(
+                    dataset_types,
+                    missing=missing_dataset_types,
+                )
             )
         )
         if missing_dataset_types:
@@ -100,11 +102,26 @@ async def export_data_release(
             # in the initial list of collections, so accumulate a list of all collections encountered
             # during export.
             run_collections_found: set[str] = set()
+            dataset_manifests: list[DatasetExportManifest] = []
             for dt in resolved_dataset_types:
+                dataset_filename = f"{dt.name}.datasets.parquet"
+                datastore_filename = f"{dt.name}.datastore.parquet"
+                dataset_manifests.append(
+                    DatasetExportManifest(
+                        dataset_type=dt.to_simple(),
+                        dataset_export_file=dataset_filename,
+                        datastore_export_file=datastore_filename,
+                    )
+                )
                 tg.start_soon(
                     limiter.limit,
                     export_datasets(
-                        butler_pool, dt, search_collections, output_directory, run_collections_found.update
+                        butler_pool,
+                        dt,
+                        search_collections,
+                        output_directory.joinpath(dataset_filename),
+                        output_directory.joinpath(datastore_filename),
+                        run_collections_found.update,
                     ),
                 )
 
@@ -124,6 +141,7 @@ async def export_data_release(
             collection_export_file=collection_filename,
             dimension_config=dimensions.dimensionConfig.dump(),
             dimension_record_files=dimension_record_export_files,
+            datasets=dataset_manifests,
         )
         async with await open_file(output_directory.joinpath("manifest.json"), "wb") as fh:
             await fh.write(manifest.model_dump_json(indent=2).encode("utf-8"))
@@ -139,4 +157,21 @@ class DataReleaseExportManifest(BaseModel):
     dimension_record_files: dict[str, str]
     """Mapping from dimension name to name of parquet file containing the
     dimension records.
+    """
+    datasets: list[DatasetExportManifest]
+    """Information about exported datasets."""
+
+
+class DatasetExportManifest(BaseModel):
+    """Manifest for a single dataset type in the data release export."""
+
+    dataset_type: SerializedDatasetType
+    """Dataset type definition."""
+    dataset_export_file: str
+    """Path to parquet file containing the exported
+    `lsst.daf.butler.DatasetRef` dataset records.
+    """
+    datastore_export_file: str
+    """Path to parquet file containing the exported Butler datastore
+    records.
     """
