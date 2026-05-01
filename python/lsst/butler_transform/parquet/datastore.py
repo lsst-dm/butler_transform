@@ -38,8 +38,8 @@ class DatastoreParquetWriter(AsyncParquetWriter):
     """Writes parquet files equivalent to Butler FileDatastore records."""
 
     def __init__(self, output_path: str | Path) -> None:
-        super().__init__(output_path, DatastoreRecordTable.get_schema())
+        super().__init__(output_path, DatastoreRecordTable.make_arrow_schema())
 
     async def write_records(self, table: DatastoreRecordTable) -> None:
         """Append records from Butler Datastore."""
-        await self.write_table(table.table)
+        await self.write_table(table.to_arrow())

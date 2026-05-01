@@ -27,12 +27,13 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Self
 
 import pyarrow
-from anyio import CancelScope, to_thread
+from anyio import AsyncContextManagerMixin, CancelScope, to_thread
 from pyarrow.parquet import ParquetFile
 
 from ..utils.sync_iterators import convert_sync_iterator_to_async
@@ -68,3 +69,46 @@ class AsyncParquetReader:
         """Return the total num of rows contained in the parquet file."""
         metadata = await to_thread.run_sync(lambda: self._reader.metadata)
         return metadata.num_rows
+
+
+class TableReaderBase[T](AsyncContextManagerMixin):
+    """Base class for implementing parquet readers that are a thin wrapper
+    around ``AsyncParquetReader`` with extra conversion logic.
+
+    Notes
+    -----
+    Subclasses should override either the ``_convert_batch`` or
+    ``_convert_table`` method to provide the conversion logic.
+    """
+
+    def __init__(self, input_file: Path | str, *, schema: pyarrow.Schema | None = None) -> None:
+        self._input_file = input_file
+        self._schema = schema
+        self._reader: AsyncParquetReader | None = None
+
+    @asynccontextmanager
+    async def __asynccontextmanager__(self) -> AsyncGenerator[Self]:
+        async with AsyncParquetReader.create(self._input_file) as reader:
+            self._reader = reader
+            try:
+                yield self
+            finally:
+                self._reader = None
+
+    async def read(self, *, batch_size: int = 50_000) -> AsyncIterator[T]:
+        async for batch in self._get_reader().iter_batches(batch_size=batch_size):
+            yield self._convert_batch(batch)
+
+    def _convert_batch(self, batch: pyarrow.RecordBatch) -> T:
+        return self._convert_table(pyarrow.Table.from_batches([batch], schema=self._schema))
+
+    def _convert_table(self, table: pyarrow.Table) -> T:
+        raise NotImplementedError("Subclasses must implement _convert_batch or _convert_table.")
+
+    async def get_row_count(self) -> int:
+        return await self._get_reader().get_row_count()
+
+    def _get_reader(self) -> AsyncParquetReader:
+        if self._reader is None:
+            raise AssertionError("Table reader async context manager was not entered.")
+        return self._reader

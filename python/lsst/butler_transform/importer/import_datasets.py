@@ -77,7 +77,7 @@ async def import_datasets(
     parquet file.
     """
     async with create_task_group() as tg:
-        async with DatasetsParquetReader.create(input_file, dataset_type) as reader:
+        async with DatasetsParquetReader(input_file, dataset_type) as reader:
             total_datasets = await reader.get_row_count()
             callback(DatasetImportStartedEvent(dataset_type=dataset_type.name, total_datasets=total_datasets))
             async for batch in reader.read():
