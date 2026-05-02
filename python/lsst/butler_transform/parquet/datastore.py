@@ -29,8 +29,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pyarrow
+
 from lsst.daf.butler._rubin.datastore_records import DatastoreRecordTable
 
+from .async_parquet_reader import TableReaderBase
 from .async_parquet_writer import AsyncParquetWriter
 
 
@@ -43,3 +46,8 @@ class DatastoreParquetWriter(AsyncParquetWriter):
     async def write_records(self, table: DatastoreRecordTable) -> None:
         """Append records from Butler Datastore."""
         await self.write_table(table.table)
+
+
+class DatastoreParquetReader(TableReaderBase[DatastoreRecordTable]):
+    def _convert_table(self, table: pyarrow.Table) -> DatastoreRecordTable:
+        return DatastoreRecordTable(table)
