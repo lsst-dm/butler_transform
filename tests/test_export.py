@@ -36,7 +36,7 @@ from pyarrow.parquet import read_table
 
 from lsst.butler_transform.export.export_data_release import export_data_release
 from lsst.butler_transform.importer.import_data_release import DataReleaseImportInfo, import_data_release
-from lsst.daf.butler import Butler, CollectionType, DatasetType
+from lsst.daf.butler import Butler, CollectionType, Config, DatasetType
 from lsst.resources import ResourcePath
 
 
@@ -184,7 +184,13 @@ class TestDatasetExport(unittest.TestCase):
 
             # Import to a new repo and make sure it round-trips.
             import_repo = self.enterContext(tempfile.TemporaryDirectory())
-            Butler.makeRepo(import_repo)
+            # Point datastore root at the existing repository, to mimic
+            # the production setup where the Google Butler server references
+            # files at their original location on the USDF filesystem.
+            config = Config()
+            config["datastore", "cls"] = "lsst.daf.butler.datastores.fileDatastore.FileDatastore"
+            config["datastore", "root"] = self.repo
+            Butler.makeRepo(import_repo, config, forceConfigRoot=False)
             asyncio.run(import_data_release(import_repo, DataReleaseImportInfo(tmpdir_path)))
             with Butler.from_config(import_repo) as import_butler:
                 for dimension in butler.dimensions.elements:
@@ -204,6 +210,10 @@ class TestDatasetExport(unittest.TestCase):
                     )
                 for ref in [ref1, ref2, ref3]:
                     self.assertEqual(import_butler.get_dataset(ref.id), ref)
+
+                self.assertEqual(import_butler.get(ref1), 1)
+                self.assertEqual(import_butler.get(ref2), 20)
+                self.assertEqual(import_butler.get(ref3), 3)
 
     def _get_absolute_datastore_path(self, relative_path: str) -> ResourcePath:
         """Given a relative path, return the absolute path to the file under

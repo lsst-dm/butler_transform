@@ -40,6 +40,12 @@ class DataReleaseImportProgressDisplay:
         self._dataset_progress.update_parent(total=dataset_type_count, completed=0)
         self._top_level.add(self._dataset_progress.get_renderable())
 
+        self._datastore_progress = NestedProgressDisplay(
+            "Datastore record import", self._progress_columns(), self._progress_columns()
+        )
+        self._datastore_progress.update_parent(total=dataset_type_count, completed=0)
+        self._top_level.add(self._datastore_progress.get_renderable())
+
     def _progress_columns(self) -> list[ProgressColumn]:
         return [
             TextColumn("{task.description}"),
@@ -70,16 +76,20 @@ class DataReleaseImportProgressDisplay:
         self._dataset_type_progress.mark_complete()
 
     def handle_dataset_import_event(self, event: DatasetImportEvent) -> None:
+        self._handle_event(self._dataset_progress, event)
+
+    def handle_datastore_import_event(self, event: DatasetImportEvent) -> None:
+        self._handle_event(self._datastore_progress, event)
+
+    def _handle_event(self, progress: NestedProgressDisplay, event: DatasetImportEvent) -> None:
         match event.event:
             case "started":
-                self._dataset_progress.update_child(
-                    event.dataset_type, total=event.total_datasets, completed=0
-                )
+                progress.update_child(event.dataset_type, total=event.total_datasets, completed=0)
             case "progress":
-                self._dataset_progress.advance_child(event.dataset_type, event.datasets_imported)
+                progress.advance_child(event.dataset_type, event.datasets_imported)
             case "completed":
-                self._dataset_progress.remove_child(event.dataset_type)
-                self._dataset_progress.advance_parent(1)
+                progress.remove_child(event.dataset_type)
+                progress.advance_parent(1)
 
 
 class NestedProgressDisplay:

@@ -87,6 +87,9 @@ class DatasetRefTable:
         """
         return self.table.column("run").unique().to_pylist()
 
+    def __len__(self) -> int:
+        return len(self.table)
+
 
 class DatasetsParquetReader(TableReaderBase[DatasetRefTable]):
     """Reads `lsst.daf.butler.DatasetRef` rows from a parquet file."""
