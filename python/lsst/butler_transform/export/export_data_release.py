@@ -33,13 +33,14 @@ from pathlib import Path
 from anyio import create_task_group, open_file, to_thread
 from pydantic import BaseModel
 
-from lsst.daf.butler import CollectionType, SerializedDatasetType
+from lsst.daf.butler import CollectionType, DatasetType, SerializedDatasetType
 
 from ..export.export_datasets import export_datasets
 from ..export.export_dimension_records import export_dimension_records
 from ..parquet.collections import CollectionsParquetWriter
 from ..utils.butler_thread_pool import ButlerThreadPool
 from ..utils.task_limiter import TaskLimiter
+from .export_datastore import export_datastore
 
 _MAX_BUTLER_CONNECTIONS = 32
 
@@ -103,27 +104,34 @@ async def export_data_release(
             # during export.
             run_collections_found: set[str] = set()
             dataset_manifests: list[DatasetExportManifest] = []
+
+            async def _export_datasets(dataset_type: DatasetType, manifest: DatasetExportManifest):
+                dataset_path = output_directory.joinpath(manifest.dataset_export_file)
+                async with limiter.limiter:
+                    await export_datasets(
+                        butler_pool,
+                        dataset_type,
+                        search_collections,
+                        dataset_path,
+                        run_collections_found.update,
+                    )
+                    await export_datastore(
+                        butler_pool,
+                        dataset_path,
+                        output_directory.joinpath(manifest.datastore_export_file),
+                    )
+                print(f"{dataset_type.name}: complete")
+
             for dt in resolved_dataset_types:
                 dataset_filename = f"{dt.name}.datasets.parquet"
                 datastore_filename = f"{dt.name}.datastore.parquet"
-                dataset_manifests.append(
-                    DatasetExportManifest(
-                        dataset_type=dt.to_simple(),
-                        dataset_export_file=dataset_filename,
-                        datastore_export_file=datastore_filename,
-                    )
+                dataset_manifest = DatasetExportManifest(
+                    dataset_type=dt.to_simple(),
+                    dataset_export_file=dataset_filename,
+                    datastore_export_file=datastore_filename,
                 )
-                tg.start_soon(
-                    limiter.limit,
-                    export_datasets(
-                        butler_pool,
-                        dt,
-                        search_collections,
-                        output_directory.joinpath(dataset_filename),
-                        output_directory.joinpath(datastore_filename),
-                        run_collections_found.update,
-                    ),
-                )
+                dataset_manifests.append(dataset_manifest)
+                tg.start_soon(_export_datasets, dt, dataset_manifest)
 
         collection_filename = "collections.parquet"
         async with CollectionsParquetWriter(
