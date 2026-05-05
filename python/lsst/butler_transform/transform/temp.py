@@ -9,11 +9,11 @@ def remap_paths(rows) -> None:
     original_datastores = {"FileDatastore@<butlerRoot>": "file:///sdf/group/rubin/repo/dp2_prep/"}
     make_uris_absolute(rows, original_datastores)
     map = {
-        "file:///sdf/group/rubin/repo/dp2_prep/": "dp2",
+        "file:///sdf/group/rubin/repo/dp2_prep": "dp2",
         # This is a rucio alias for /sdf/data/rubin/repo/main_20210215/LSSTCam/calib
         "file:///sdf/data/rubin/rses/lsst/butlerdisk/rucio/repo/ancillary/LSSTCam/calib": "calib",
-        "file:///sdf/data/rubin/shared/refcats/": "refcats",
-        "file:///sdf/data/rubin/lsstdata/offline/instrument/": "raw",
+        "file:///sdf/data/rubin/shared/refcats": "refcats",
+        "file:///sdf/data/rubin/lsstdata/offline/instrument/LSSTCam": "raw",
     }
     map_uris_to_datastores(rows, datastore_map=map)
 
