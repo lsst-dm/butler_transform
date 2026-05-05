@@ -35,9 +35,9 @@ from pyarrow.parquet import read_table
 
 from lsst.butler_transform.export.export_data_release import export_data_release
 from lsst.butler_transform.importer.import_data_release import DataReleaseImportInfo, import_data_release
+from lsst.butler_transform.transform.rewrite_datastore_paths import DatastorePathMapper
 from lsst.butler_transform.utils.butler_thread_pool import ButlerThreadPool
-from lsst.daf.butler import Butler, CollectionType, Config, DatasetType
-from lsst.resources import ResourcePath
+from lsst.daf.butler import Butler, CollectionType, DatasetType
 
 
 class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
@@ -67,12 +67,24 @@ class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
-            # dt2 is passed as a glob to verify that we expand globs.  We do
-            # not explicitly pass in the collection "runs/def", instead using a
-            # tagged collection to pull in "ref2".
             async with ButlerThreadPool.from_config(self.repo, 16) as butler_pool:
+                datastore_mapper = await butler_pool.run_with_butler(
+                    lambda butler: DatastorePathMapper.from_butler(
+                        butler,
+                        # Remap all files as absolute paths in the default Butler
+                        # datastore.
+                        {"": "FileDatastore@<butlerRoot>"},
+                    )
+                )
+                # dt2 is passed as a glob to verify that we expand globs.  We do
+                # not explicitly pass in the collection "runs/def", instead using a
+                # tagged collection to pull in "ref2".
                 await export_data_release(
-                    butler_pool, tmpdir_path, ["dt1", "d*2", "dt3"], ["runs/abc", "tag"]
+                    butler_pool,
+                    tmpdir_path,
+                    ["dt1", "d*2", "dt3"],
+                    ["runs/abc", "tag"],
+                    datastore_transform_function=datastore_mapper.remap,
                 )
 
             dt1_datasets = read_table(tmpdir_path.joinpath("dt1.datasets.parquet")).to_pylist()
@@ -102,7 +114,7 @@ class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(dt1_datastore), 2)
             self.assertEqual(dt1_datastore[0]["datastore_name"], "FileDatastore@<butlerRoot>")
             self.assertEqual(dt1_datastore[0]["dataset_id"], ref1.id)
-            self.assertEqual(self._get_absolute_datastore_path(dt1_datastore[0]["path"]), butler.getURI(ref1))
+            self.assertEqual(dt1_datastore[0]["path"], str(butler.getURI(ref1)))
             self.assertEqual(dt1_datastore[0]["formatter"], "lsst.daf.butler.formatters.json.JsonFormatter")
             self.assertEqual(dt1_datastore[0]["storage_class"], "int")
             self.assertIsNone(dt1_datastore[0]["component"])
@@ -110,7 +122,7 @@ class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(dt1_datastore[0]["checksum"])
             self.assertEqual(dt1_datastore[1]["datastore_name"], "FileDatastore@<butlerRoot>")
             self.assertEqual(dt1_datastore[1]["dataset_id"], ref2.id)
-            self.assertEqual(self._get_absolute_datastore_path(dt1_datastore[1]["path"]), butler.getURI(ref2))
+            self.assertEqual(dt1_datastore[1]["path"], str(butler.getURI(ref2)))
             self.assertEqual(dt1_datastore[1]["formatter"], "lsst.daf.butler.formatters.json.JsonFormatter")
             self.assertEqual(dt1_datastore[1]["storage_class"], "int")
             self.assertIsNone(dt1_datastore[1]["component"])
@@ -121,7 +133,7 @@ class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(dt2_datastore), 1)
             self.assertEqual(dt2_datastore[0]["datastore_name"], "FileDatastore@<butlerRoot>")
             self.assertEqual(dt2_datastore[0]["dataset_id"], ref3.id)
-            self.assertEqual(self._get_absolute_datastore_path(dt2_datastore[0]["path"]), butler.getURI(ref3))
+            self.assertEqual(dt2_datastore[0]["path"], str(butler.getURI(ref3)))
             self.assertEqual(dt2_datastore[0]["formatter"], "lsst.daf.butler.formatters.json.JsonFormatter")
             self.assertEqual(dt2_datastore[0]["storage_class"], "int")
             self.assertIsNone(dt2_datastore[0]["component"])
@@ -185,13 +197,7 @@ class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
 
             # Import to a new repo and make sure it round-trips.
             import_repo = self.enterContext(tempfile.TemporaryDirectory())
-            # Point datastore root at the existing repository, to mimic
-            # the production setup where the Google Butler server references
-            # files at their original location on the USDF filesystem.
-            config = Config()
-            config["datastore", "cls"] = "lsst.daf.butler.datastores.fileDatastore.FileDatastore"
-            config["datastore", "root"] = self.repo
-            Butler.makeRepo(import_repo, config, forceConfigRoot=False)
+            Butler.makeRepo(import_repo)
             await import_data_release(import_repo, DataReleaseImportInfo(tmpdir_path))
             with Butler.from_config(import_repo) as import_butler:
                 for dimension in butler.dimensions.elements:
@@ -215,9 +221,3 @@ class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(import_butler.get(ref1), 1)
                 self.assertEqual(import_butler.get(ref2), 20)
                 self.assertEqual(import_butler.get(ref3), 3)
-
-    def _get_absolute_datastore_path(self, relative_path: str) -> ResourcePath:
-        """Given a relative path, return the absolute path to the file under
-        the source Butler's datastore root.
-        """
-        return ResourcePath(Path(self.repo).joinpath(relative_path).absolute())

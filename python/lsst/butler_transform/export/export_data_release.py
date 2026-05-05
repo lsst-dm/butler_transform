@@ -40,7 +40,7 @@ from ..export.export_dimension_records import export_dimension_records
 from ..parquet.collections import CollectionsParquetWriter
 from ..utils.butler_thread_pool import ButlerThreadPool
 from ..utils.task_limiter import TaskLimiter
-from .export_datastore import DatastoreExporter
+from .export_datastore import DatastoreExporter, DatastoreTransformFunction
 
 
 async def export_data_release(
@@ -48,6 +48,7 @@ async def export_data_release(
     output_directory: Path,
     dataset_types: Iterable[str],
     collections: Iterable[str],
+    datastore_transform_function: DatastoreTransformFunction | None = None,
 ) -> None:
     """Bulk export datasets and associated data in a format that can be used to
     bulk load another Butler database for an end-user-facing data release.
@@ -60,6 +61,9 @@ async def export_data_release(
         List of dataset type names that will be exported.
     collections
         List of collections that datasets will be exported from.
+    datastore_transform_function, optional
+        Function that will be called to remap Butler datastore tables (e.g. to
+        map absolute URLs to datastore names).
     """
 
     Path(output_directory).mkdir(exist_ok=True)
@@ -108,7 +112,7 @@ async def export_data_release(
         run_collections_found: set[str] = set()
         dataset_manifests: list[DatasetExportManifest] = []
 
-        datastore_exporter = DatastoreExporter(butler_pool)
+        datastore_exporter = DatastoreExporter(butler_pool, transform_function=datastore_transform_function)
 
         async def _export_datasets(dataset_type: DatasetType, manifest: DatasetExportManifest):
             dataset_path = output_directory.joinpath(manifest.dataset_export_file)

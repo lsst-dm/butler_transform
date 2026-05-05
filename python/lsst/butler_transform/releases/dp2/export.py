@@ -33,6 +33,7 @@ from pathlib import Path
 from anyio import to_thread
 
 from ...export.export_data_release import export_data_release
+from ...transform.rewrite_datastore_paths import DatastorePathMapper
 from ...utils.butler_thread_pool import ButlerThreadPool
 
 # From
@@ -90,6 +91,16 @@ COLLECTIONS = (
     "LSSTCam/runs/DRP/DP2/v30_0_0/DM-53881/stage2",
 )
 
+# Remap physical paths, many of which are baked into the database as absolute
+# URLs, to virtual "datastore" names.
+DATASTORE_MAP = {
+    "file:///sdf/group/rubin/repo/dp2_prep": "dp2",
+    # This is a rucio alias for /sdf/data/rubin/repo/main_20210215/LSSTCam/calib
+    "file:///sdf/data/rubin/rses/lsst/butlerdisk/rucio/repo/ancillary/LSSTCam/calib": "calib",
+    "file:///sdf/data/rubin/shared/refcats": "refcats",
+    "file:///sdf/data/rubin/lsstdata/offline/instrument/LSSTCam": "raw",
+}
+
 _MAX_BUTLER_CONNECTIONS = 32
 
 
@@ -99,7 +110,16 @@ async def export_dp2() -> None:
     # for miscellaneous file writing I/O.
     to_thread.current_default_thread_limiter().total_tokens = _MAX_BUTLER_CONNECTIONS * 3
     async with ButlerThreadPool.from_config("dp2_prep", _MAX_BUTLER_CONNECTIONS) as butler_pool:
-        await export_data_release(butler_pool, Path.cwd().joinpath("dp2-export"), DATASET_TYPES, COLLECTIONS)
+        datastore_mapper = await butler_pool.run_with_butler(
+            lambda butler: DatastorePathMapper.from_butler(butler, DATASTORE_MAP)
+        )
+        await export_data_release(
+            butler_pool,
+            output_directory=Path.cwd().joinpath("dp2-export"),
+            dataset_types=DATASET_TYPES,
+            collections=COLLECTIONS,
+            datastore_transform_function=datastore_mapper.remap,
+        )
 
 
 if __name__ == "__main__":
