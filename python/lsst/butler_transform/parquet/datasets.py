@@ -28,15 +28,15 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterable
-from contextlib import asynccontextmanager
 from functools import cache
 from pathlib import Path
+from typing import override
 
 import pyarrow
 
 from lsst.daf.butler import DatasetId, DatasetRef, DatasetType, DimensionGroup
 
-from .async_parquet_reader import AsyncParquetReader
+from .async_parquet_reader import AsyncParquetReader, TableReaderBase
 from .async_parquet_writer import AsyncParquetWriter
 
 
@@ -57,29 +57,6 @@ async def read_dataset_ids(input_file: str | Path) -> AsyncIterator[list[Dataset
     async with AsyncParquetReader.create(input_file) as reader:
         async for batch in reader.iter_batches(batch_size=50000, columns=[column_name]):
             yield [_convert_parquet_uuid_to_dataset_id(id.as_py()) for id in batch.column(column_name)]
-
-
-class DatasetsParquetReader:
-    """Reads `lsst.daf.butler.DatasetRef` rows from a parquet file."""
-
-    def __init__(self, reader: AsyncParquetReader, dataset_type: DatasetType) -> None:
-        self._reader = reader
-        self._dataset_type = dataset_type
-
-    @asynccontextmanager
-    @staticmethod
-    async def create(
-        input_file: Path | str, dataset_type: DatasetType
-    ) -> AsyncIterator[DatasetsParquetReader]:
-        async with AsyncParquetReader.create(input_file) as reader:
-            yield DatasetsParquetReader(reader, dataset_type)
-
-    async def read(self, *, batch_size: int = 50_000) -> AsyncIterator[DatasetRefTable]:
-        async for batch in self._reader.iter_batches(batch_size=batch_size):
-            yield DatasetRefTable(self._dataset_type, batch)
-
-    async def get_row_count(self) -> int:
-        return await self._reader.get_row_count()
 
 
 class DatasetRefTable:
@@ -109,6 +86,21 @@ class DatasetRefTable:
         in this table.
         """
         return self.table.column("run").unique().to_pylist()
+
+    def __len__(self) -> int:
+        return len(self.table)
+
+
+class DatasetsParquetReader(TableReaderBase[DatasetRefTable]):
+    """Reads `lsst.daf.butler.DatasetRef` rows from a parquet file."""
+
+    def __init__(self, input_file: Path | str, dataset_type: DatasetType) -> None:
+        super().__init__(input_file)
+        self._dataset_type = dataset_type
+
+    @override
+    def _convert_table(self, table: pyarrow.Table) -> DatasetRefTable:
+        return DatasetRefTable(self._dataset_type, table)
 
 
 @cache

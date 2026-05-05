@@ -28,6 +28,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Sized
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal
@@ -36,8 +37,11 @@ from anyio import create_task_group
 from anyio.abc import TaskStatus
 
 from lsst.daf.butler import Butler, DatasetRef, DatasetType
+from lsst.daf.butler._rubin.datastore_records import import_datastore_records_table
 
+from ..parquet.async_parquet_reader import TableReaderBase
 from ..parquet.datasets import DatasetRefTable, DatasetsParquetReader
+from ..parquet.datastore import DatastoreParquetReader
 from ..utils.butler_pool import ButlerPool
 
 
@@ -67,36 +71,59 @@ type DatasetImportEvent = DatasetImportStartedEvent | DatasetImportProgressEvent
 type DatasetImportEventCallback = Callable[[DatasetImportEvent], None]
 
 
-async def import_datasets(
-    butler_pool: ButlerPool,
-    dataset_type: DatasetType,
-    input_file: Path,
-    callback: DatasetImportEventCallback,
-) -> None:
-    """Import the `lsst.daf.butler.DatasetRef` information from the given
-    parquet file.
-    """
-    async with create_task_group() as tg:
-        async with DatasetsParquetReader.create(input_file, dataset_type) as reader:
+class DatasetImporter:
+    def __init__(self, butler_pool: ButlerPool, dataset_type: DatasetType) -> None:
+        self._butler_pool = butler_pool
+        self._dataset_type = dataset_type
+
+    async def import_datasets(
+        self,
+        input_file: Path,
+        event_callback: DatasetImportEventCallback,
+    ) -> None:
+        """Import the `lsst.daf.butler.DatasetRef` information from the given
+        parquet file.
+        """
+        async with DatasetsParquetReader(input_file, self._dataset_type) as reader:
+            await self._do_import(reader, event_callback, _import_datasets)
+
+    async def import_datastore(
+        self,
+        input_file: Path,
+        event_callback: DatasetImportEventCallback,
+    ) -> None:
+        """Import datastore records from the given parquet file."""
+        async with DatastoreParquetReader(input_file) as reader:
+            await self._do_import(reader, event_callback, import_datastore_records_table)
+
+    async def _do_import[T: Sized](
+        self,
+        reader: TableReaderBase[T],
+        event_callback: DatasetImportEventCallback,
+        import_function: Callable[[Butler, T], None],
+    ):
+        async with create_task_group() as tg:
             total_datasets = await reader.get_row_count()
-            callback(DatasetImportStartedEvent(dataset_type=dataset_type.name, total_datasets=total_datasets))
+            event_callback(
+                DatasetImportStartedEvent(dataset_type=self._dataset_type.name, total_datasets=total_datasets)
+            )
             async for batch in reader.read():
-                await tg.start(_import_batch, butler_pool, batch, callback)
+                await tg.start(self._import_batch, batch, event_callback, import_function)
 
-    callback(DatasetImportCompletedEvent(dataset_type=dataset_type.name))
+        event_callback(DatasetImportCompletedEvent(dataset_type=self._dataset_type.name))
 
-
-async def _import_batch(
-    butler_pool: ButlerPool,
-    batch: DatasetRefTable,
-    callback: DatasetImportEventCallback,
-    *,
-    task_status: TaskStatus,
-) -> None:
-    await butler_pool.run_with_butler(_import_datasets, batch, task_status=task_status)
-    callback(
-        DatasetImportProgressEvent(dataset_type=batch.dataset_type.name, datasets_imported=len(batch.table))
-    )
+    async def _import_batch[T: Sized](
+        self,
+        batch: T,
+        event_callback: DatasetImportEventCallback,
+        import_function: Callable[[Butler, T], None],
+        *,
+        task_status: TaskStatus,
+    ) -> None:
+        await self._butler_pool.run_with_butler(import_function, batch, task_status=task_status)
+        event_callback(
+            DatasetImportProgressEvent(dataset_type=self._dataset_type.name, datasets_imported=len(batch))
+        )
 
 
 def _import_datasets(butler: Butler, table: DatasetRefTable):

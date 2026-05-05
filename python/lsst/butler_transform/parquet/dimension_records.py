@@ -27,15 +27,13 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pyarrow
 
 from lsst.daf.butler import DimensionElement, DimensionRecordTable
 
-from .async_parquet_reader import AsyncParquetReader
+from .async_parquet_reader import TableReaderBase
 from .async_parquet_writer import AsyncParquetWriter
 
 
@@ -54,26 +52,12 @@ class DimensionRecordParquetWriter(AsyncParquetWriter):
         await self.write_table(table.to_arrow())
 
 
-class DimensionRecordParquetReader:
+class DimensionRecordParquetReader(TableReaderBase[DimensionRecordTable]):
     """Reads `lsst.daf.butler.DimensionRecord` rows from a parquet file."""
 
-    def __init__(self, reader: AsyncParquetReader, dimension: DimensionElement) -> None:
-        self._reader = reader
+    def __init__(self, input_file: Path | str, dimension: DimensionElement) -> None:
+        super().__init__(input_file, schema=DimensionRecordTable.make_arrow_schema(dimension))
         self._dimension = dimension
 
-    @asynccontextmanager
-    @staticmethod
-    async def create(
-        input_file: Path | str, dimension: DimensionElement
-    ) -> AsyncIterator[DimensionRecordParquetReader]:
-        async with AsyncParquetReader.create(input_file) as reader:
-            yield DimensionRecordParquetReader(reader, dimension)
-
-    async def read(self, *, batch_size: int = 50_000) -> AsyncIterator[DimensionRecordTable]:
-        schema = DimensionRecordTable.make_arrow_schema(self._dimension)
-        async for batch in self._reader.iter_batches(batch_size=batch_size):
-            table = pyarrow.Table.from_batches([batch], schema=schema)
-            yield DimensionRecordTable(self._dimension, table=table)
-
-    async def get_row_count(self) -> int:
-        return await self._reader.get_row_count()
+    def _convert_table(self, table: pyarrow.Table) -> DimensionRecordTable:
+        return DimensionRecordTable(self._dimension, table=table)

@@ -27,90 +27,27 @@
 
 from __future__ import annotations
 
-import uuid
-from collections.abc import Iterator, Mapping
 from pathlib import Path
 
 import pyarrow
 
-from lsst.daf.butler.datastore.record_data import (
-    DatastoreRecordData,
-    StoredDatastoreItemInfo,
-)
-from lsst.daf.butler.datastores.fileDatastore import StoredFileInfo
+from lsst.daf.butler._rubin.datastore_records import DatastoreRecordTable
 
+from .async_parquet_reader import TableReaderBase
 from .async_parquet_writer import AsyncParquetWriter
-
-type ButlerDatastoreRecords = Mapping[str, DatastoreRecordData]
-"""Mapping from Datastore name to the records for that Datastore (as
-returned by `lsst.daf.butler.Datastore.export_records`.)
-"""
 
 
 class DatastoreParquetWriter(AsyncParquetWriter):
     """Writes parquet files equivalent to Butler FileDatastore records."""
 
     def __init__(self, output_path: str | Path) -> None:
-        super().__init__(output_path, _create_schema())
+        super().__init__(output_path, DatastoreRecordTable.get_schema())
 
-    async def write_records(self, records: ButlerDatastoreRecords) -> None:
+    async def write_records(self, table: DatastoreRecordTable) -> None:
         """Append records from Butler Datastore."""
-        rows = list(_convert_records_from_rows(records))
-        if len(rows) == 0:
-            return
-
-        batch = pyarrow.RecordBatch.from_pylist(rows, schema=self._schema)
-        await self.write_batch(batch)
+        await self.write_table(table.table)
 
 
-def _convert_records_from_rows(records: ButlerDatastoreRecords) -> Iterator[dict[str, object]]:
-    # The full structure of the export structure used by
-    # Datastore.export_records/Datastore.import_records is:
-    # dict:
-    #   datastore name -> DatastoreRecordData (class):
-    #     .records (dict):
-    #       DatasetId -> dict:
-    #         table name (str) -> list[StoredDatastoreItemInfo]:
-    for datastore in records.keys():
-        for dataset_id, record in records[datastore].records.items():
-            yield from _convert_record(datastore, dataset_id, record)
-
-
-def _convert_record(
-    datastore_name: str,
-    dataset_id: uuid.UUID,
-    record: dict[str, list[StoredDatastoreItemInfo]],
-) -> Iterator[dict[str, object]]:
-    if len(record) > 1:
-        # The keys in this dict are a "table" name.  No existing Datastore
-        # implementation has more than one key here so it's not clear why
-        # this is organized like this.
-        raise NotImplementedError("Cannot export datastore records with more than one 'table' entry.")
-    item_infos = list(record.values())[0]
-
-    for item in item_infos:
-        assert isinstance(item, StoredFileInfo), "Exporting records is only supported for FileDatastore"
-        row = {
-            "datastore_name": datastore_name,
-            "dataset_id": dataset_id.bytes,
-            **item.to_simple().model_dump(),
-        }
-        yield row
-
-
-def _create_schema() -> pyarrow.Schema:
-    string_dict = pyarrow.dictionary(pyarrow.int32(), pyarrow.string())
-    return pyarrow.schema(
-        [
-            pyarrow.field("datastore_name", string_dict, nullable=False),
-            pyarrow.field("dataset_id", pyarrow.binary(16), nullable=False),
-            # These are the fields from the StoredFileInfo Butler datastore
-            # records class.
-            pyarrow.field("path", pyarrow.string(), nullable=False),
-            pyarrow.field("formatter", string_dict, nullable=False),
-            pyarrow.field("storage_class", string_dict, nullable=False),
-            pyarrow.field("component", string_dict, nullable=True),
-            pyarrow.field("checksum", pyarrow.string(), nullable=True),
-            pyarrow.field("file_size", pyarrow.int64(), nullable=False),
-        ]
-    )
+class DatastoreParquetReader(TableReaderBase[DatastoreRecordTable]):
+    def _convert_table(self, table: pyarrow.Table) -> DatastoreRecordTable:
+        return DatastoreRecordTable(table)
