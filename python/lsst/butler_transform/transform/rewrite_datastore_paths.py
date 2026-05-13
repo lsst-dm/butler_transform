@@ -31,6 +31,8 @@ import re
 from collections.abc import Sequence
 from typing import Callable, TypedDict
 
+import pyarrow as pa
+
 from lsst.daf.butler import Butler
 from lsst.daf.butler._rubin.datastore_records import DatastoreRecordTable
 from lsst.daf.butler.arrow_utils import ArrowTableUtils
@@ -44,15 +46,16 @@ class DatastoreNameAndPath(TypedDict):
 def rewrite_datastore_and_path(
     table: DatastoreRecordTable, function: Callable[[Sequence[DatastoreNameAndPath]], None]
 ):
-    original_columns = table.table.select(["datastore_name", "path"])
+    original_table = table.to_arrow()
+    original_columns = original_table.select(["datastore_name", "path"])
     rows = original_columns.to_pylist()
     function(rows)
-    replacement_columns = table.table.from_pylist(rows, schema=original_columns.schema)
+    replacement_columns = pa.Table.from_pylist(rows, schema=original_columns.schema)
     output_table = ArrowTableUtils.replace_column(
-        table.table, "datastore_name", replacement_columns["datastore_name"]
+        original_table, "datastore_name", replacement_columns["datastore_name"]
     )
     output_table = ArrowTableUtils.replace_column(output_table, "path", replacement_columns["path"])
-    return DatastoreRecordTable(output_table)
+    return DatastoreRecordTable.from_arrow(output_table)
 
 
 def make_uris_absolute(rows: Sequence[DatastoreNameAndPath], datastore_roots: dict[str, str]) -> None:
