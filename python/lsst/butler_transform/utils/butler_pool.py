@@ -47,3 +47,5 @@ class ButlerPool(Protocol):
         *args: Unpack[P],
         task_status: TaskStatus = TASK_STATUS_IGNORED,
     ) -> T: ...
+
+    max_connections: int

@@ -40,7 +40,7 @@ from ..export.export_dimension_records import export_dimension_records
 from ..parquet.collections import CollectionsParquetWriter
 from ..utils.butler_thread_pool import ButlerThreadPool
 from ..utils.task_limiter import TaskLimiter
-from .export_datastore import export_datastore
+from .export_datastore import DatastoreExporter
 
 _MAX_BUTLER_CONNECTIONS = 32
 
@@ -105,6 +105,8 @@ async def export_data_release(
             run_collections_found: set[str] = set()
             dataset_manifests: list[DatasetExportManifest] = []
 
+            datastore_exporter = DatastoreExporter(butler_pool)
+
             async def _export_datasets(dataset_type: DatasetType, manifest: DatasetExportManifest):
                 dataset_path = output_directory.joinpath(manifest.dataset_export_file)
                 async with limiter.limiter:
@@ -115,8 +117,7 @@ async def export_data_release(
                         dataset_path,
                         run_collections_found.update,
                     )
-                    await export_datastore(
-                        butler_pool,
+                    await datastore_exporter.export_from_dataset_parquet(
                         dataset_path,
                         output_directory.joinpath(manifest.datastore_export_file),
                     )
