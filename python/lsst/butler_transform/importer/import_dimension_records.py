@@ -113,7 +113,7 @@ class DimensionRecordImporter:
             batch_size = 500
 
         async with create_task_group() as tg:
-            async with DimensionRecordParquetReader.create(input_file, dimension) as reader:
+            async with DimensionRecordParquetReader(input_file, dimension) as reader:
                 total_rows = await reader.get_row_count()
                 self._progress_tracker.dimension_started(dimension.name, total_rows)
                 async for batch in reader.read(batch_size=batch_size):

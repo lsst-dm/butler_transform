@@ -33,7 +33,7 @@ from typing import Iterable
 
 from anyio import CapacityLimiter, create_task_group
 
-from lsst.butler_transform.importer.import_datasets import import_datasets
+from lsst.butler_transform.importer.import_datasets import DatasetImporter
 from lsst.butler_transform.importer.import_dimension_records import (
     DimensionRecordImporter,
 )
@@ -137,8 +137,10 @@ async def import_data_release(butler_repo: str, import_info: DataReleaseImportIn
                 await import_collections(butler_pool, import_info.get_collection_input())
                 progress.mark_collection_import_complete()
 
-                # Import datasets.
-                limiter = CapacityLimiter(_MAX_BUTLER_CONNECTIONS)
+                # Each dataset import fans out to a lot of concurrent
+                # subtasks, so it saves memory and contention to run fewer
+                # simultaneously.
+                limiter = CapacityLimiter(max(1, _MAX_BUTLER_CONNECTIONS // 4))
                 for ds in dataset_inputs:
                     tg.start_soon(
                         _import_datasets_when_ready, butler_pool, ds, limiter, dimension_tracker, progress
@@ -159,9 +161,8 @@ async def _import_datasets_when_ready(
 ) -> None:
     await dimension_tracker.wait_until_required_dimensions_complete(info.dataset_type.dimensions)
     async with limiter:
-        await import_datasets(
-            butler_pool,
-            info.dataset_type,
-            info.dataset_export_file,
-            progress_display.handle_dataset_import_event,
+        importer = DatasetImporter(butler_pool, info.dataset_type)
+        await importer.import_datasets(info.dataset_export_file, progress_display.handle_dataset_import_event)
+        await importer.import_datastore(
+            info.datastore_export_file, progress_display.handle_datastore_import_event
         )

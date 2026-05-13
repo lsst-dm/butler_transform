@@ -27,7 +27,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Collection, Iterable
 from itertools import batched
 from pathlib import Path
 
@@ -39,10 +39,10 @@ from anyio import (
 from anyio.abc import ObjectReceiveStream, ObjectSendStream, TaskStatus
 
 from lsst.daf.butler import Butler, DatasetId, DatasetType
-from lsst.daf.butler.registry.interfaces import FakeDatasetRef
+from lsst.daf.butler._rubin.datastore_records import DatastoreRecordTable, export_datastore_records_table
 
 from ..parquet.datasets import DatasetRefTable, DatasetsParquetWriter, read_dataset_ids
-from ..parquet.datastore import ButlerDatastoreRecords, DatastoreParquetWriter
+from ..parquet.datastore import DatastoreParquetWriter
 from ..utils.butler_thread_pool import ButlerThreadPool
 from ..utils.sync_send_stream import SyncSendStream
 
@@ -79,9 +79,7 @@ async def export_datasets(
     # Export datastore records to parquet.
     async with create_task_group() as tg:
         # Look up datastore records associated with the datasets.
-        datastore_records_send, datastore_records_recv = create_memory_object_stream[ButlerDatastoreRecords](
-            2
-        )
+        datastore_records_send, datastore_records_recv = create_memory_object_stream[DatastoreRecordTable](2)
         tg.start_soon(
             _fetch_datastore_records,
             butler_pool,
@@ -123,7 +121,7 @@ async def _write_datasets_to_parquet(
 async def _fetch_datastore_records(
     butler_pool: ButlerThreadPool,
     dataset_file: Path,
-    output: ObjectSendStream[ButlerDatastoreRecords],
+    output: ObjectSendStream[DatastoreRecordTable],
 ) -> None:
     async with output, create_task_group() as tg:
         async for dataset_ids in read_dataset_ids(dataset_file):
@@ -132,19 +130,18 @@ async def _fetch_datastore_records(
 
 async def _fetch_datastore_record_batch(
     butler_pool: ButlerThreadPool,
-    dataset_ids: Iterable[DatasetId],
-    output: ObjectSendStream[ButlerDatastoreRecords],
+    dataset_ids: Collection[DatasetId],
+    output: ObjectSendStream[DatastoreRecordTable],
     task_status: TaskStatus,
 ) -> None:
-    refs = [FakeDatasetRef(id) for id in dataset_ids]
     async with butler_pool.get_butler() as butler:
         task_status.started()
-        records = await to_thread.run_sync(butler._datastore.export_records, refs)
+        records = await to_thread.run_sync(export_datastore_records_table, butler, dataset_ids)
         await output.send(records)
 
 
 async def _write_datastore_records(
-    output_file: Path, input: ObjectReceiveStream[ButlerDatastoreRecords]
+    output_file: Path, input: ObjectReceiveStream[DatastoreRecordTable]
 ) -> None:
     async with input, DatastoreParquetWriter(output_file) as writer:
         async for records in input:
