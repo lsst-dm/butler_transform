@@ -30,11 +30,7 @@ from __future__ import annotations
 from collections.abc import Collection
 from pathlib import Path
 
-from anyio import (
-    create_memory_object_stream,
-    create_task_group,
-    to_thread,
-)
+from anyio import CapacityLimiter, create_memory_object_stream, create_task_group
 from anyio.abc import ObjectReceiveStream, ObjectSendStream, TaskStatus
 
 from lsst.daf.butler import DatasetId
@@ -42,62 +38,75 @@ from lsst.daf.butler._rubin.datastore_records import DatastoreRecordTable, expor
 
 from ..parquet.datasets import read_dataset_ids
 from ..parquet.datastore import DatastoreParquetWriter
-from ..utils.butler_thread_pool import ButlerThreadPool
+from ..utils.butler_pool import ButlerPool
 
 
-async def export_datastore(
-    butler_pool: ButlerThreadPool,
-    input_parquet_path: Path,
-    output_parquet_path: Path,
-) -> None:
-    """Export Butler datastore records to a parquet file.
+class DatastoreExporter:
+    """Exports Butler datastore records to parquet.
 
     Parameters
     ----------
     butler_pool
         Pool of Butler instances used to fetch data.
-    input_parquet_path
-        Parquet file containing a ``dataset_id`` column with dataset UUIDs for
-        which we will export datastore records.
-    output_parquet_path
-        Path where we will write a parquet file containing the datastore
-        records.
     """
-    # Export datastore records to parquet.
-    async with create_task_group() as tg:
-        # Look up datastore records associated with the datasets.
-        datastore_records_send, datastore_records_recv = create_memory_object_stream[DatastoreRecordTable](2)
-        tg.start_soon(
-            _fetch_datastore_records,
-            butler_pool,
-            input_parquet_path,
-            datastore_records_send,
-        )
 
-        # Write the datastore records to parquet
-        tg.start_soon(_write_datastore_records, output_parquet_path, datastore_records_recv)
+    def __init__(self, butler_pool: ButlerPool) -> None:
+        self._butler_pool = butler_pool
+        self._limiter = CapacityLimiter(self._butler_pool.max_connections)
 
+    async def export_from_dataset_parquet(
+        self,
+        input_parquet_path: Path,
+        output_parquet_path: Path,
+    ) -> None:
+        """Export Butler datastore records to a parquet file.
 
-async def _fetch_datastore_records(
-    butler_pool: ButlerThreadPool,
-    dataset_file: Path,
-    output: ObjectSendStream[DatastoreRecordTable],
-) -> None:
-    async with output, create_task_group() as tg:
-        async for dataset_ids in read_dataset_ids(dataset_file):
-            await tg.start(_fetch_datastore_record_batch, butler_pool, dataset_ids, output)
+        Parameters
+        ----------
+        input_parquet_path
+            Parquet file containing a ``dataset_id`` column with dataset UUIDs for
+            which we will export datastore records.
+        output_parquet_path
+            Path where we will write a parquet file containing the datastore
+            records.
+        """
+        # Export datastore records to parquet.
+        async with create_task_group() as tg:
+            # Look up datastore records associated with the datasets.
+            datastore_records_send, datastore_records_recv = create_memory_object_stream[
+                DatastoreRecordTable
+            ](2)
+            tg.start_soon(
+                self._fetch_datastore_records,
+                input_parquet_path,
+                datastore_records_send,
+            )
 
+            # Write the datastore records to parquet
+            tg.start_soon(_write_datastore_records, output_parquet_path, datastore_records_recv)
 
-async def _fetch_datastore_record_batch(
-    butler_pool: ButlerThreadPool,
-    dataset_ids: Collection[DatasetId],
-    output: ObjectSendStream[DatastoreRecordTable],
-    task_status: TaskStatus,
-) -> None:
-    async with butler_pool.get_butler() as butler:
-        task_status.started()
-        records = await to_thread.run_sync(export_datastore_records_table, butler, dataset_ids)
-        await output.send(records)
+    async def _fetch_datastore_records(
+        self,
+        dataset_file: Path,
+        output: ObjectSendStream[DatastoreRecordTable],
+    ) -> None:
+        async with output, create_task_group() as tg:
+            async for dataset_ids in read_dataset_ids(dataset_file):
+                await tg.start(self._fetch_datastore_record_batch, dataset_ids, output)
+
+    async def _fetch_datastore_record_batch(
+        self,
+        dataset_ids: Collection[DatasetId],
+        output: ObjectSendStream[DatastoreRecordTable],
+        task_status: TaskStatus,
+    ) -> None:
+        # Limit total number of jobs waiting to put records into the queue to
+        # prevent memory exhaustion.
+        async with self._limiter:
+            records = await self._butler_pool.run_with_butler(
+                export_datastore_records_table, dataset_ids, task_status=task_status
+            )
+            await output.send(records)
 
 
 async def _write_datastore_records(

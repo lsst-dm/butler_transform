@@ -51,7 +51,7 @@ class ButlerProcessPool(ButlerPool):
     def __init__(self, executor: ProcessPoolExecutor, max_connections: int) -> None:
         self._executor = executor
         self._semaphore = asyncio.BoundedSemaphore(max_connections)
-        pass
+        self.max_connections = max_connections
 
     @asynccontextmanager
     @staticmethod
