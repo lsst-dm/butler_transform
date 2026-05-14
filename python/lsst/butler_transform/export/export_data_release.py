@@ -30,7 +30,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from pathlib import Path
 
-from anyio import create_task_group, open_file, to_thread
+from anyio import create_task_group, open_file
 from pydantic import BaseModel
 
 from lsst.daf.butler import CollectionType, DatasetType, SerializedDatasetType
@@ -42,118 +42,119 @@ from ..utils.butler_thread_pool import ButlerThreadPool
 from ..utils.task_limiter import TaskLimiter
 from .export_datastore import DatastoreExporter
 
-_MAX_BUTLER_CONNECTIONS = 32
-
 
 async def export_data_release(
-    output_directory: Path, butler_repo: str, dataset_types: Iterable[str], collections: Iterable[str]
+    butler_pool: ButlerThreadPool,
+    output_directory: Path,
+    dataset_types: Iterable[str],
+    collections: Iterable[str],
 ) -> None:
-    """Bulk export datasets in a format that can be used to bulk load another
-    Butler database for an end-user-facing data release.
+    """Bulk export datasets and associated data in a format that can be used to
+    bulk load another Butler database for an end-user-facing data release.
+
+    butler_pool
+        Pool of Butler instances from which data will be exported.
+    output_directory
+        Destination directory for parquet files containing export data.
+    dataset_types
+        List of dataset type names that will be exported.
+    collections
+        List of collections that datasets will be exported from.
     """
-    # By default, AnyIO only allows 40 concurrent threads total.  Each
-    # synchronous Butler query consumes a thread, and then we need more threads
-    # for miscellaneous file writing I/O.
-    to_thread.current_default_thread_limiter().total_tokens = _MAX_BUTLER_CONNECTIONS * 3
 
     Path(output_directory).mkdir(exist_ok=True)
 
-    async with (
-        ButlerThreadPool.from_config(butler_repo, _MAX_BUTLER_CONNECTIONS) as butler_pool,
-    ):
-        missing_dataset_types: list[str] = []
-        resolved_dataset_types = await butler_pool.run_with_butler(
-            lambda butler: tuple(
-                butler.registry.queryDatasetTypes(
-                    dataset_types,
-                    missing=missing_dataset_types,
-                )
+    missing_dataset_types: list[str] = []
+    resolved_dataset_types = await butler_pool.run_with_butler(
+        lambda butler: tuple(
+            butler.registry.queryDatasetTypes(
+                dataset_types,
+                missing=missing_dataset_types,
             )
         )
-        if missing_dataset_types:
-            raise RuntimeError(f"Required dataset types not present in repository: {missing_dataset_types}")
+    )
+    if missing_dataset_types:
+        raise RuntimeError(f"Required dataset types not present in repository: {missing_dataset_types}")
 
-        dimensions = await butler_pool.run_with_butler(lambda butler: butler.dimensions)
+    dimensions = await butler_pool.run_with_butler(lambda butler: butler.dimensions)
 
-        # Snapshot the set of collections that we will be querying against.
-        resolved_collections = await butler_pool.run_with_butler(
-            lambda butler: butler.collections.query_info(
-                collections, include_chains=True, flatten_chains=True, include_doc=True
+    # Snapshot the set of collections that we will be querying against.
+    resolved_collections = await butler_pool.run_with_butler(
+        lambda butler: butler.collections.query_info(
+            collections, include_chains=True, flatten_chains=True, include_doc=True
+        )
+    )
+    # Drop chained collections to get only the concrete collections we will search for.
+    search_collections = [c.name for c in resolved_collections if c.type != CollectionType.CHAINED]
+
+    # Each individual export task should saturate at least one Butler
+    # connection, so limit the concurrency to prevent other resources (e.g.
+    # memory and file handles) from being exhausted.
+    limiter = TaskLimiter(butler_pool.max_connections)
+    async with create_task_group() as tg:
+        dimension_record_export_files: dict[str, str] = {}
+        for el in dimensions.elements:
+            if el.has_own_table:
+                filename = f"{el.name}.dimension.parquet"
+                dimension_record_export_files[el.name] = filename
+                tg.start_soon(
+                    limiter.limit,
+                    export_dimension_records(butler_pool, el, output_directory.joinpath(filename)),
+                )
+
+        # Datasets found via tagged collections may reference run collections that are not present
+        # in the initial list of collections, so accumulate a list of all collections encountered
+        # during export.
+        run_collections_found: set[str] = set()
+        dataset_manifests: list[DatasetExportManifest] = []
+
+        datastore_exporter = DatastoreExporter(butler_pool)
+
+        async def _export_datasets(dataset_type: DatasetType, manifest: DatasetExportManifest):
+            dataset_path = output_directory.joinpath(manifest.dataset_export_file)
+            async with limiter.limiter:
+                await export_datasets(
+                    butler_pool,
+                    dataset_type,
+                    search_collections,
+                    dataset_path,
+                    run_collections_found.update,
+                )
+                await datastore_exporter.export_from_dataset_parquet(
+                    dataset_path,
+                    output_directory.joinpath(manifest.datastore_export_file),
+                )
+            print(f"{dataset_type.name}: complete")
+
+        for dt in resolved_dataset_types:
+            dataset_filename = f"{dt.name}.datasets.parquet"
+            datastore_filename = f"{dt.name}.datastore.parquet"
+            dataset_manifest = DatasetExportManifest(
+                dataset_type=dt.to_simple(),
+                dataset_export_file=dataset_filename,
+                datastore_export_file=datastore_filename,
             )
-        )
-        # Drop chained collections to get only the concrete collections we will search for.
-        search_collections = [c.name for c in resolved_collections if c.type != CollectionType.CHAINED]
+            dataset_manifests.append(dataset_manifest)
+            tg.start_soon(_export_datasets, dt, dataset_manifest)
 
-        # Each individual export task should saturate at least one Butler
-        # connection, so limit the concurrency to prevent other resources (e.g.
-        # memory and file handles) from being exhausted.
-        limiter = TaskLimiter(_MAX_BUTLER_CONNECTIONS)
-        async with create_task_group() as tg:
-            dimension_record_export_files: dict[str, str] = {}
-            for el in dimensions.elements:
-                if el.has_own_table:
-                    filename = f"{el.name}.dimension.parquet"
-                    dimension_record_export_files[el.name] = filename
-                    tg.start_soon(
-                        limiter.limit,
-                        export_dimension_records(butler_pool, el, output_directory.joinpath(filename)),
-                    )
+    collection_filename = "collections.parquet"
+    async with CollectionsParquetWriter(output_directory.joinpath(collection_filename)) as collection_writer:
+        await collection_writer.write(resolved_collections)
+        extra_run_collections = run_collections_found - set([c.name for c in resolved_collections])
+        if extra_run_collections:
+            extra_collection_info = await butler_pool.run_with_butler(
+                lambda butler: butler.collections.query_info(extra_run_collections, include_doc=True)
+            )
+            await collection_writer.write(extra_collection_info)
 
-            # Datasets found via tagged collections may reference run collections that are not present
-            # in the initial list of collections, so accumulate a list of all collections encountered
-            # during export.
-            run_collections_found: set[str] = set()
-            dataset_manifests: list[DatasetExportManifest] = []
-
-            datastore_exporter = DatastoreExporter(butler_pool)
-
-            async def _export_datasets(dataset_type: DatasetType, manifest: DatasetExportManifest):
-                dataset_path = output_directory.joinpath(manifest.dataset_export_file)
-                async with limiter.limiter:
-                    await export_datasets(
-                        butler_pool,
-                        dataset_type,
-                        search_collections,
-                        dataset_path,
-                        run_collections_found.update,
-                    )
-                    await datastore_exporter.export_from_dataset_parquet(
-                        dataset_path,
-                        output_directory.joinpath(manifest.datastore_export_file),
-                    )
-                print(f"{dataset_type.name}: complete")
-
-            for dt in resolved_dataset_types:
-                dataset_filename = f"{dt.name}.datasets.parquet"
-                datastore_filename = f"{dt.name}.datastore.parquet"
-                dataset_manifest = DatasetExportManifest(
-                    dataset_type=dt.to_simple(),
-                    dataset_export_file=dataset_filename,
-                    datastore_export_file=datastore_filename,
-                )
-                dataset_manifests.append(dataset_manifest)
-                tg.start_soon(_export_datasets, dt, dataset_manifest)
-
-        collection_filename = "collections.parquet"
-        async with CollectionsParquetWriter(
-            output_directory.joinpath(collection_filename)
-        ) as collection_writer:
-            await collection_writer.write(resolved_collections)
-            extra_run_collections = run_collections_found - set([c.name for c in resolved_collections])
-            if extra_run_collections:
-                extra_collection_info = await butler_pool.run_with_butler(
-                    lambda butler: butler.collections.query_info(extra_run_collections, include_doc=True)
-                )
-                await collection_writer.write(extra_collection_info)
-
-        manifest = DataReleaseExportManifest(
-            collection_export_file=collection_filename,
-            dimension_config=dimensions.dimensionConfig.dump(),
-            dimension_record_files=dimension_record_export_files,
-            datasets=dataset_manifests,
-        )
-        async with await open_file(output_directory.joinpath("manifest.json"), "wb") as fh:
-            await fh.write(manifest.model_dump_json(indent=2).encode("utf-8"))
+    manifest = DataReleaseExportManifest(
+        collection_export_file=collection_filename,
+        dimension_config=dimensions.dimensionConfig.dump(),
+        dimension_record_files=dimension_record_export_files,
+        datasets=dataset_manifests,
+    )
+    async with await open_file(output_directory.joinpath("manifest.json"), "wb") as fh:
+        await fh.write(manifest.model_dump_json(indent=2).encode("utf-8"))
 
 
 class DataReleaseExportManifest(BaseModel):
