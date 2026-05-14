@@ -27,7 +27,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import tempfile
 import unittest
 from pathlib import Path
@@ -36,18 +35,19 @@ from pyarrow.parquet import read_table
 
 from lsst.butler_transform.export.export_data_release import export_data_release
 from lsst.butler_transform.importer.import_data_release import DataReleaseImportInfo, import_data_release
+from lsst.butler_transform.utils.butler_thread_pool import ButlerThreadPool
 from lsst.daf.butler import Butler, CollectionType, Config, DatasetType
 from lsst.resources import ResourcePath
 
 
-class TestDatasetExport(unittest.TestCase):
+class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.repo = self.enterContext(tempfile.TemporaryDirectory())
         Butler.makeRepo(self.repo)
         with Butler.from_config(self.repo, writeable=True) as butler:
             butler.import_(filename="resource://lsst.daf.butler/tests/registry_data/lsstcam-subset.yaml")
 
-    def test_dataset_release_export(self) -> None:
+    async def test_dataset_release_export(self) -> None:
         butler: Butler = self.enterContext(Butler.from_config(self.repo, writeable=True, run="runs/abc"))
         # Set up a second run collection and a tagged collection to use for
         # testing collection export.
@@ -70,9 +70,10 @@ class TestDatasetExport(unittest.TestCase):
             # dt2 is passed as a glob to verify that we expand globs.  We do
             # not explicitly pass in the collection "runs/def", instead using a
             # tagged collection to pull in "ref2".
-            asyncio.run(
-                export_data_release(tmpdir_path, self.repo, ["dt1", "d*2", "dt3"], ["runs/abc", "tag"])
-            )
+            async with ButlerThreadPool.from_config(self.repo, 16) as butler_pool:
+                await export_data_release(
+                    butler_pool, tmpdir_path, ["dt1", "d*2", "dt3"], ["runs/abc", "tag"]
+                )
 
             dt1_datasets = read_table(tmpdir_path.joinpath("dt1.datasets.parquet")).to_pylist()
             dt1_datasets.sort(key=lambda row: row["visit"])
@@ -191,7 +192,7 @@ class TestDatasetExport(unittest.TestCase):
             config["datastore", "cls"] = "lsst.daf.butler.datastores.fileDatastore.FileDatastore"
             config["datastore", "root"] = self.repo
             Butler.makeRepo(import_repo, config, forceConfigRoot=False)
-            asyncio.run(import_data_release(import_repo, DataReleaseImportInfo(tmpdir_path)))
+            await import_data_release(import_repo, DataReleaseImportInfo(tmpdir_path))
             with Butler.from_config(import_repo) as import_butler:
                 for dimension in butler.dimensions.elements:
                     if dimension.has_own_table:
