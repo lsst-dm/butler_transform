@@ -27,10 +27,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from pathlib import Path
 
-from anyio import CapacityLimiter, create_memory_object_stream, create_task_group
+from anyio import CapacityLimiter, create_memory_object_stream, create_task_group, to_thread
 from anyio.abc import ObjectReceiveStream, ObjectSendStream, TaskStatus
 
 from lsst.daf.butler import DatasetId
@@ -40,6 +40,8 @@ from ..parquet.datasets import read_dataset_ids
 from ..parquet.datastore import DatastoreParquetWriter
 from ..utils.butler_pool import ButlerPool
 
+type DatastoreTransformFunction = Callable[[DatastoreRecordTable], DatastoreRecordTable]
+
 
 class DatastoreExporter:
     """Exports Butler datastore records to parquet.
@@ -48,10 +50,16 @@ class DatastoreExporter:
     ----------
     butler_pool
         Pool of Butler instances used to fetch data.
+    transform_function, optional
+        Function that will be called to modify each batch of datastore records
+        before writing them to parquet.
     """
 
-    def __init__(self, butler_pool: ButlerPool) -> None:
+    def __init__(
+        self, butler_pool: ButlerPool, transform_function: DatastoreTransformFunction | None = None
+    ) -> None:
         self._butler_pool = butler_pool
+        self._transform_function = transform_function
         self._limiter = CapacityLimiter(self._butler_pool.max_connections)
 
     async def export_from_dataset_parquet(
@@ -106,6 +114,8 @@ class DatastoreExporter:
             records = await self._butler_pool.run_with_butler(
                 export_datastore_records_table, dataset_ids, task_status=task_status
             )
+            if self._transform_function is not None:
+                records = await to_thread.run_sync(self._transform_function, records)
             await output.send(records)
 
 

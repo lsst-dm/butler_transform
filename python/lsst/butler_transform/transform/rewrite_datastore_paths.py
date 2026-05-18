@@ -38,6 +38,25 @@ from lsst.daf.butler._rubin.datastore_records import DatastoreRecordTable
 from lsst.daf.butler.arrow_utils import ArrowTableUtils
 
 
+class DatastorePathMapper:
+    def __init__(
+        self, input_datastore_roots: dict[str, str], output_prefix_datastore_mapping: dict[str, str]
+    ) -> None:
+        self._input_datastore_roots = input_datastore_roots
+        self._output_prefix_datastore_mapping = output_prefix_datastore_mapping
+
+    @staticmethod
+    def from_butler(butler: Butler, output_prefix_datastore_mapping: dict[str, str]) -> DatastorePathMapper:
+        return DatastorePathMapper(get_datastore_roots_from_butler(butler), output_prefix_datastore_mapping)
+
+    def remap(self, table: DatastoreRecordTable) -> DatastoreRecordTable:
+        return rewrite_datastore_and_path(table, self._remap_rows)
+
+    def _remap_rows(self, rows: Sequence[DatastoreNameAndPath]) -> None:
+        make_uris_absolute(rows, self._input_datastore_roots)
+        map_uris_to_datastores(rows, self._output_prefix_datastore_mapping)
+
+
 class DatastoreNameAndPath(TypedDict):
     datastore_name: str
     path: str
