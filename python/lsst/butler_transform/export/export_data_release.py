@@ -33,18 +33,18 @@ from pathlib import Path
 from anyio import create_task_group, open_file
 from pydantic import BaseModel
 
-from lsst.daf.butler import CollectionType, DatasetType, SerializedDatasetType
+from lsst.daf.butler import Butler, CollectionType, DatasetType, SerializedDatasetType
 
 from ..export.export_datasets import export_datasets
 from ..export.export_dimension_records import export_dimension_records
 from ..parquet.collections import CollectionsParquetWriter
-from ..utils.butler_thread_pool import ButlerThreadPool
+from ..utils.butler_pool import ButlerPool
 from ..utils.task_limiter import TaskLimiter
 from .export_datastore import DatastoreExporter, DatastoreTransformFunction
 
 
 async def export_data_release(
-    butler_pool: ButlerThreadPool,
+    butler_pool: ButlerPool,
     output_directory: Path,
     dataset_types: Iterable[str],
     collections: Iterable[str],
@@ -68,22 +68,10 @@ async def export_data_release(
 
     Path(output_directory).mkdir(exist_ok=True)
 
-    missing_dataset_types: list[str] = []
-    resolved_dataset_types = await butler_pool.run_with_butler(
-        lambda butler: tuple(
-            butler.registry.queryDatasetTypes(
-                dataset_types,
-                missing=missing_dataset_types,
-            )
-        )
-    )
-    if missing_dataset_types:
-        raise RuntimeError(f"Required dataset types not present in repository: {missing_dataset_types}")
-
-    dimensions = await butler_pool.run_with_butler(lambda butler: butler.dimensions)
+    resolved_dataset_types = await butler_pool.run_with_butler(_resolve_dataset_types, dataset_types)
 
     # Snapshot the set of collections that we will be querying against.
-    resolved_collections = await butler_pool.run_with_butler(
+    resolved_collections = await butler_pool.run_with_butler_in_current_process(
         lambda butler: butler.collections.query_info(
             collections, include_chains=True, flatten_chains=True, include_doc=True
         )
@@ -95,6 +83,7 @@ async def export_data_release(
     # connection, so limit the concurrency to prevent other resources (e.g.
     # memory and file handles) from being exhausted.
     limiter = TaskLimiter(butler_pool.max_connections)
+    dimensions = await butler_pool.run_with_butler_in_current_process(lambda butler: butler.dimensions)
     async with create_task_group() as tg:
         dimension_record_export_files: dict[str, str] = {}
         for el in dimensions.elements:
@@ -117,13 +106,13 @@ async def export_data_release(
         async def _export_datasets(dataset_type: DatasetType, manifest: DatasetExportManifest):
             dataset_path = output_directory.joinpath(manifest.dataset_export_file)
             async with limiter.limiter:
-                await export_datasets(
+                export_result = await export_datasets(
                     butler_pool,
                     dataset_type,
                     search_collections,
                     dataset_path,
-                    run_collections_found.update,
                 )
+                run_collections_found.update(export_result.run_collections_found)
                 await datastore_exporter.export_from_dataset_parquet(
                     dataset_path,
                     output_directory.joinpath(manifest.datastore_export_file),
@@ -146,7 +135,7 @@ async def export_data_release(
         await collection_writer.write(resolved_collections)
         extra_run_collections = run_collections_found - set([c.name for c in resolved_collections])
         if extra_run_collections:
-            extra_collection_info = await butler_pool.run_with_butler(
+            extra_collection_info = await butler_pool.run_with_butler_in_current_process(
                 lambda butler: butler.collections.query_info(extra_run_collections, include_doc=True)
             )
             await collection_writer.write(extra_collection_info)
@@ -159,6 +148,20 @@ async def export_data_release(
     )
     async with await open_file(output_directory.joinpath("manifest.json"), "wb") as fh:
         await fh.write(manifest.model_dump_json(indent=2).encode("utf-8"))
+
+
+def _resolve_dataset_types(butler: Butler, dataset_types: Iterable[str]) -> tuple[DatasetType, ...]:
+    missing_dataset_types: list[str] = []
+    resolved_dataset_types = tuple(
+        butler.registry.queryDatasetTypes(
+            dataset_types,
+            missing=missing_dataset_types,
+        )
+    )
+    if missing_dataset_types:
+        raise RuntimeError(f"Required dataset types not present in repository: {missing_dataset_types}")
+
+    return resolved_dataset_types
 
 
 class DataReleaseExportManifest(BaseModel):
