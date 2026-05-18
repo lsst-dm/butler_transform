@@ -46,6 +46,22 @@ class ButlerPool(Protocol):
         func: Callable[[Butler, *P], T],
         *args: Unpack[P],
         task_status: TaskStatus = TASK_STATUS_IGNORED,
-    ) -> T: ...
+    ) -> T:
+        """Run the given function with a Butler instance from the connection
+        pool provided as its first argument.  The function and all of its
+        arguments must be pickleable.  The function may be executed in a
+        different process from the caller.
+        """
+
+    async def run_with_butler_in_current_process[*P, T](
+        self,
+        func: Callable[[Butler, *P], T],
+        *args: Unpack[P],
+        task_status: TaskStatus = TASK_STATUS_IGNORED,
+    ) -> T:
+        """Run the given function with a Butler instance from the connection
+        pool provided as its first argument.  The function will run in the same
+        process as the caller, so its arguments do not need to be pickleable.
+        """
 
     max_connections: int

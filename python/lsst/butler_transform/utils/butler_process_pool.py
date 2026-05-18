@@ -41,6 +41,7 @@ from anyio.abc import TaskStatus
 from lsst.daf.butler import Butler
 
 from .butler_pool import ButlerPool
+from .butler_thread_pool import ButlerThreadPool
 
 
 class ButlerProcessPool(ButlerPool):
@@ -48,10 +49,13 @@ class ButlerProcessPool(ButlerPool):
     execute work that needs access to an `lsst.daf.Butler` instance.
     """
 
-    def __init__(self, executor: ProcessPoolExecutor, max_connections: int) -> None:
+    def __init__(
+        self, executor: ProcessPoolExecutor, thread_pool: ButlerThreadPool, max_connections: int
+    ) -> None:
         self._executor = executor
         self._semaphore = asyncio.BoundedSemaphore(max_connections)
         self.max_connections = max_connections
+        self._thread_pool = thread_pool
 
     @asynccontextmanager
     @staticmethod
@@ -65,13 +69,14 @@ class ButlerProcessPool(ButlerPool):
         else:
             context = get_context("spawn")
 
-        with ProcessPoolExecutor(
-            max_workers=max_connections,
-            initializer=_ButlerProcessPoolWorker.initialize,
-            initargs=(repo, writeable),
-            mp_context=context,
-        ) as executor:
-            yield ButlerProcessPool(executor, max_connections)
+        async with ButlerThreadPool.from_config(repo, max_connections, writeable) as thread_pool:
+            with ProcessPoolExecutor(
+                max_workers=max_connections,
+                initializer=_ButlerProcessPoolWorker.initialize,
+                initargs=(repo, writeable),
+                mp_context=context,
+            ) as executor:
+                yield ButlerProcessPool(executor, thread_pool, max_connections)
 
     async def run_with_butler[*P, T](
         self,
@@ -88,6 +93,15 @@ class ButlerProcessPool(ButlerPool):
             return await asyncio.get_running_loop().run_in_executor(
                 self._executor, _ButlerProcessPoolWorker.run_with_butler, func, args
             )
+
+    async def run_with_butler_in_current_process[*P, T](
+        self,
+        func: Callable[[Butler, *P], T],
+        *args: Unpack[P],
+        task_status: TaskStatus = TASK_STATUS_IGNORED,
+    ) -> T:
+        async with self._semaphore:
+            return await self._thread_pool.run_with_butler(func, *args, task_status=task_status)
 
 
 class _ButlerProcessPoolWorker:
