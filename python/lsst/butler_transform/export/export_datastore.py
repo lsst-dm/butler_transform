@@ -30,10 +30,10 @@ from __future__ import annotations
 from collections.abc import Callable, Collection
 from pathlib import Path
 
-from anyio import CapacityLimiter, create_memory_object_stream, create_task_group, to_thread
+from anyio import CapacityLimiter, create_memory_object_stream, create_task_group
 from anyio.abc import ObjectReceiveStream, ObjectSendStream, TaskStatus
 
-from lsst.daf.butler import DatasetId
+from lsst.daf.butler import Butler, DatasetId
 from lsst.daf.butler._rubin.datastore_records import DatastoreRecordTable, export_datastore_records_table
 
 from ..parquet.datasets import read_dataset_ids
@@ -112,11 +112,21 @@ class DatastoreExporter:
         # prevent memory exhaustion.
         async with self._limiter:
             records = await self._butler_pool.run_with_butler(
-                export_datastore_records_table, dataset_ids, task_status=task_status
+                _export_and_transform_datastore_records,
+                dataset_ids,
+                self._transform_function,
+                task_status=task_status,
             )
-            if self._transform_function is not None:
-                records = await to_thread.run_sync(self._transform_function, records)
             await output.send(records)
+
+
+def _export_and_transform_datastore_records(
+    butler: Butler, dataset_ids: Collection[DatasetId], transform_function: DatastoreTransformFunction | None
+) -> DatastoreRecordTable:
+    records = export_datastore_records_table(butler, dataset_ids)
+    if transform_function is not None:
+        records = transform_function(records)
+    return records
 
 
 async def _write_datastore_records(
