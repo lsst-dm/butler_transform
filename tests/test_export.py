@@ -67,9 +67,6 @@ class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
-            # dt2 is passed as a glob to verify that we expand globs.  We do
-            # not explicitly pass in the collection "runs/def", instead using a
-            # tagged collection to pull in "ref2".
             async with ButlerThreadPool.from_config(self.repo, 16) as butler_pool:
                 datastore_mapper = await butler_pool.run_with_butler(
                     lambda butler: DatastorePathMapper.from_butler(
@@ -79,6 +76,9 @@ class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
                         {"": "FileDatastore@<butlerRoot>"},
                     )
                 )
+                # dt2 is passed as a glob to verify that we expand globs.  We do
+                # not explicitly pass in the collection "runs/def", instead using a
+                # tagged collection to pull in "ref2".
                 await export_data_release(
                     butler_pool,
                     tmpdir_path,
