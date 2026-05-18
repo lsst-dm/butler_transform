@@ -46,9 +46,9 @@ class DatasetsParquetWriter(AsyncParquetWriter):
     def __init__(self, output_file: str | Path, dataset_type: DatasetType) -> None:
         super().__init__(output_file, _create_dataset_arrow_schema(dataset_type.dimensions))
 
-    async def add_refs(self, refs: DatasetRefTable) -> None:
+    def add_refs_sync(self, refs: DatasetRefTable) -> None:
         """Append a batch of datasets to the parquet file."""
-        await self.write_table(refs.table)
+        self.write_table_sync(refs.table)
 
 
 async def read_dataset_ids(input_file: str | Path) -> AsyncIterator[list[DatasetId]]:
