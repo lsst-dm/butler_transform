@@ -23,26 +23,23 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.from collections.abc import Iterable
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Iterable
+from collections.abc import Callable, Iterable
 from itertools import batched
 from pathlib import Path
 
 from anyio import (
     create_memory_object_stream,
     create_task_group,
-    to_thread,
 )
-from anyio.abc import ObjectReceiveStream, ObjectSendStream, TaskStatus
+from anyio.abc import ObjectReceiveStream
 
-from lsst.daf.butler import Butler, DatasetId, DatasetType
-from lsst.daf.butler._rubin.datastore_records import DatastoreRecordTable, export_datastore_records_table
+from lsst.daf.butler import Butler, DatasetType
 
-from ..parquet.datasets import DatasetRefTable, DatasetsParquetWriter, read_dataset_ids
-from ..parquet.datastore import DatastoreParquetWriter
+from ..parquet.datasets import DatasetRefTable, DatasetsParquetWriter
 from ..utils.butler_thread_pool import ButlerThreadPool
 from ..utils.sync_send_stream import SyncSendStream
 
@@ -51,20 +48,31 @@ async def export_datasets(
     butler_pool: ButlerThreadPool,
     dataset_type: DatasetType,
     collections: Iterable[str],
-    dataset_path: Path,
-    datastore_path: Path,
+    output_parquet_path: Path,
     run_collection_callback: Callable[[Iterable[str]], None],
 ) -> None:
-    """Export datasets of the given type to two parquet files:
-    1. A "datasets" file containing the same information as non-expanded
-       `lsst.daf.butler.DatasetRef` instances.
-    2. A "datastore" file containing the same information as
-       `lsst.daf.butler.datastore.stored_file_info.StoredFileInfo`.
+    """Export `lsst.daf.butler.DatasetRef` information to a parquet file.
+
+    Parameters
+    ----------
+    butler_pool
+        Pool of Butler instances used to fetch data.
+    dataset_type
+        Type of datasets to export.
+    collections
+        List of collections containing the datasets to be exported.
+    output_parquet_path
+        Path where we will write a parquet file containing the datastore
+        records.
+    run_collection_callback
+        Function that will be called with a list of run collections referenced
+        by the datasets found during the export process.  This function will be
+        called multiple times, and a given collection may be duplicated between
+        multiple calls.
     """
 
     dataset_ref_send, dataset_ref_recv = create_memory_object_stream[DatasetRefTable](2)
 
-    # Export dataset refs to parquet.
     async with create_task_group() as tg:
         tg.start_soon(
             butler_pool.run_with_butler,
@@ -73,24 +81,12 @@ async def export_datasets(
             ),
         )
         tg.start_soon(
-            _write_datasets_to_parquet, dataset_ref_recv, dataset_type, dataset_path, run_collection_callback
+            _write_datasets_to_parquet,
+            dataset_ref_recv,
+            dataset_type,
+            output_parquet_path,
+            run_collection_callback,
         )
-
-    # Export datastore records to parquet.
-    async with create_task_group() as tg:
-        # Look up datastore records associated with the datasets.
-        datastore_records_send, datastore_records_recv = create_memory_object_stream[DatastoreRecordTable](2)
-        tg.start_soon(
-            _fetch_datastore_records,
-            butler_pool,
-            dataset_path,
-            datastore_records_send,
-        )
-
-        # Write the datastore records to parquet
-        tg.start_soon(_write_datastore_records, datastore_path, datastore_records_recv)
-
-    print(f"{dataset_type.name}: complete")
 
 
 def _query_datasets(
@@ -116,33 +112,3 @@ async def _write_datasets_to_parquet(
             print(f"{dataset_type}: {len(refs.table)} datasets")
             run_collection_callback(refs.get_run_collections())
             await writer.add_refs(refs)
-
-
-async def _fetch_datastore_records(
-    butler_pool: ButlerThreadPool,
-    dataset_file: Path,
-    output: ObjectSendStream[DatastoreRecordTable],
-) -> None:
-    async with output, create_task_group() as tg:
-        async for dataset_ids in read_dataset_ids(dataset_file):
-            await tg.start(_fetch_datastore_record_batch, butler_pool, dataset_ids, output)
-
-
-async def _fetch_datastore_record_batch(
-    butler_pool: ButlerThreadPool,
-    dataset_ids: Collection[DatasetId],
-    output: ObjectSendStream[DatastoreRecordTable],
-    task_status: TaskStatus,
-) -> None:
-    async with butler_pool.get_butler() as butler:
-        task_status.started()
-        records = await to_thread.run_sync(export_datastore_records_table, butler, dataset_ids)
-        await output.send(records)
-
-
-async def _write_datastore_records(
-    output_file: Path, input: ObjectReceiveStream[DatastoreRecordTable]
-) -> None:
-    async with input, DatastoreParquetWriter(output_file) as writer:
-        async for records in input:
-            await writer.write_records(records)

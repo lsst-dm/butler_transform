@@ -34,6 +34,8 @@ from lsst.daf.butler import Butler, Config
 
 from ...importer.import_data_release import DataReleaseImportInfo, import_data_release
 
+_DATASTORES = ("dp2", "calib", "refcats", "raw")
+
 
 @click.command
 @click.argument("export_directory")
@@ -46,11 +48,26 @@ def import_dp2(export_directory: str, database_uri: str, schema: str | None) -> 
         config["registry", "db"] = database_uri
         if schema is not None:
             config["registry", "namespace"] = schema
+
+        config["datastore", "cls"] = "lsst.daf.butler.datastores.chainedDatastore.ChainedDatastore"
+        config["datastore", "datastores"] = [
+            _generate_datastore_config(datastore_name) for datastore_name in _DATASTORES
+        ]
+
         repo_config = Butler.makeRepo(butler_repo, config, dimensionConfig=import_info.get_dimension_config())
+        repo_config.dumpToUri("dp2-butler-config.yaml")
 
         asyncio.run(import_data_release(butler_repo, import_info))
 
-        print(repo_config.dump())
+
+def _generate_datastore_config(datastore_name: str) -> dict:
+    return {
+        "datastore": {
+            "cls": "lsst.daf.butler.datastores.fileDatastore.FileDatastore",
+            "name": datastore_name,
+            "records": {"table": f"{datastore_name}_datastore_records"},
+        }
+    }
 
 
 if __name__ == "__main__":
