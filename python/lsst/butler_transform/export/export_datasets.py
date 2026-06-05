@@ -38,7 +38,7 @@ from ..parquet.datasets import DatasetRefTable, DatasetsParquetWriter
 from ..utils.butler_pool import ButlerPool
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass
 class ExportDatasetsResult:
     run_collections_found: set[str]
     """List of run collection names that were referenced by datasets found
