@@ -27,14 +27,10 @@
 
 from pathlib import Path
 
-from anyio import create_memory_object_stream, create_task_group
-from anyio.abc import ObjectReceiveStream
-
-from lsst.daf.butler import Butler, DimensionElement, DimensionRecordTable
+from lsst.daf.butler import Butler, DimensionElement
 
 from ..parquet.dimension_records import DimensionRecordParquetWriter
 from ..utils.butler_pool import ButlerPool
-from ..utils.sync_send_stream import SyncSendStream
 
 
 async def export_dimension_records(
@@ -43,24 +39,10 @@ async def export_dimension_records(
     """Export all dimension records of the given element from the Butler
     repository to a parquet file.
     """
-    record_send, record_recv = create_memory_object_stream[DimensionRecordTable](2)
-    async with create_task_group() as tg:
-        tg.start_soon(
-            butler_pool.run_with_butler,
-            lambda butler: _query_dimension_records(butler, dimension, SyncSendStream(record_send)),
-        )
-        tg.start_soon(_write_records_to_parquet, dimension, output_path, record_recv)
+    await butler_pool.run_with_butler(_export_dimension_records_sync, dimension, output_path)
 
 
-def _query_dimension_records(butler: Butler, dimension: DimensionElement, output: SyncSendStream) -> None:
-    with output, butler.query() as query:
+def _export_dimension_records_sync(butler: Butler, dimension: DimensionElement, output_path: Path) -> None:
+    with DimensionRecordParquetWriter(output_path, dimension) as writer, butler.query() as query:
         for page in query.dimension_records(dimension.name).iter_table_pages():
-            output.send(page)
-
-
-async def _write_records_to_parquet(
-    dimension: DimensionElement, output_path: Path, input: ObjectReceiveStream[DimensionRecordTable]
-) -> None:
-    async with input, DimensionRecordParquetWriter(output_path, dimension) as writer:
-        async for table in input:
-            await writer.add_records_from_table(table)
+            writer.add_records_from_table_sync(page)

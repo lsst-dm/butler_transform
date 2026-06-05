@@ -27,7 +27,7 @@
 
 from __future__ import annotations
 
-from contextlib import AbstractAsyncContextManager
+from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from pathlib import Path
 from typing import Self
 
@@ -36,7 +36,7 @@ from anyio import CancelScope, to_thread
 from pyarrow.parquet import ParquetWriter
 
 
-class AsyncParquetWriter(AbstractAsyncContextManager):
+class AsyncParquetWriter(AbstractAsyncContextManager, AbstractContextManager):
     """Async wrapper around `pyarrow.parquet.ParquetWriter`.
 
     Parameters
@@ -58,39 +58,58 @@ class AsyncParquetWriter(AbstractAsyncContextManager):
         self._min_rows_per_write = min_rows_per_write
         self._pending_tables: list[pyarrow.Table] = []
         self._pending_row_count = 0
+        self._async = False
 
     async def __aenter__(self) -> Self:
-        self._writer = await to_thread.run_sync(
-            lambda: ParquetWriter(self._output_path, self._schema, compression="ZSTD")
-        )
+        self._async = True
+        return await to_thread.run_sync(self.__enter__)
+
+    def __enter__(self) -> Self:
+        if self._writer is not None:
+            raise AssertionError("AsyncParquetWriter context should only be entered once.")
+        self._writer = ParquetWriter(self._output_path, self._schema, compression="ZSTD")
         return self
 
     async def write_batch(self, batch: pyarrow.RecordBatch) -> None:
         """Append a batch of records to the parquet file."""
+        self._assert_async()
         await self.write_table(pyarrow.Table.from_batches([batch], schema=self._schema))
 
     async def write_table(self, table: pyarrow.Table) -> None:
         """Append a table to the parquet file."""
+        self._assert_async()
+        await to_thread.run_sync(self.write_table_sync, table)
+
+    def write_table_sync(self, table: pyarrow.Table) -> None:
         if self._writer is None:
             raise AssertionError("AsyncParquetWriter context was not entered.")
         self._pending_tables.append(table)
         self._pending_row_count += table.num_rows
         if self._pending_row_count >= self._min_rows_per_write:
-            await self.flush()
+            self._flush_sync()
 
-    async def flush(self) -> None:
-        """Write any rows buffered in memory to disk."""
+    def _flush_sync(self) -> None:
         if self._writer is None:
             raise AssertionError("AsyncParquetWriter context was not entered.")
         if self._pending_tables:
-            await to_thread.run_sync(self._writer.write, pyarrow.concat_tables(self._pending_tables))
+            self._writer.write(pyarrow.concat_tables(self._pending_tables))
             self._pending_tables.clear()
             self._pending_row_count = 0
 
     async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
         with CancelScope(shield=True):
-            if self._writer is not None:
-                try:
-                    await self.flush()
-                finally:
-                    await to_thread.run_sync(self._writer.close)
+            await to_thread.run_sync(self.__exit__, exc_type, exc_value, traceback)
+
+    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
+        if self._writer is not None:
+            self._flush_sync()
+            self._writer.close()
+            self._writer = None
+
+    def _assert_async(self) -> None:
+        if self._writer is None:
+            raise AssertionError("AsyncParquetWriter context was not entered.")
+        if not self._async:
+            raise AssertionError(
+                "AsyncParquetWriter should be opened using an async context manager to use async functions."
+            )

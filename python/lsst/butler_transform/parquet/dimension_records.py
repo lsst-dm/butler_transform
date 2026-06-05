@@ -45,11 +45,11 @@ class DimensionRecordParquetWriter(AsyncParquetWriter):
         super().__init__(output_path, schema, min_rows_per_write=50_000)
         self._dimension = dimension
 
-    async def add_records_from_table(self, table: DimensionRecordTable) -> None:
+    def add_records_from_table_sync(self, table: DimensionRecordTable) -> None:
         assert table.element == self._dimension, (
             "Dimension records to write should be same as dimensions from writer constructor."
         )
-        await self.write_table(table.to_arrow())
+        self.write_table_sync(table.to_arrow())
 
 
 class DimensionRecordParquetReader(TableReaderBase[DimensionRecordTable]):

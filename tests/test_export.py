@@ -36,7 +36,7 @@ from pyarrow.parquet import read_table
 from lsst.butler_transform.export.export_data_release import export_data_release
 from lsst.butler_transform.importer.import_data_release import DataReleaseImportInfo, import_data_release
 from lsst.butler_transform.transform.rewrite_datastore_paths import DatastorePathMapper
-from lsst.butler_transform.utils.butler_thread_pool import ButlerThreadPool
+from lsst.butler_transform.utils.butler_process_pool import ButlerProcessPool
 from lsst.daf.butler import Butler, CollectionType, DatasetType
 
 
@@ -67,14 +67,12 @@ class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
-            async with ButlerThreadPool.from_config(self.repo, 16) as butler_pool:
-                datastore_mapper = await butler_pool.run_with_butler(
-                    lambda butler: DatastorePathMapper.from_butler(
-                        butler,
-                        # Remap all files as absolute paths in the default Butler
-                        # datastore.
-                        {"": "FileDatastore@<butlerRoot>"},
-                    )
+            async with ButlerProcessPool.from_config(self.repo, 16) as butler_pool:
+                datastore_mapper = DatastorePathMapper.from_butler(
+                    butler,
+                    # Remap all files as absolute paths in the default Butler
+                    # datastore.
+                    {"": "FileDatastore@<butlerRoot>"},
                 )
                 # dt2 is passed as a glob to verify that we expand globs.  We do
                 # not explicitly pass in the collection "runs/def", instead using a

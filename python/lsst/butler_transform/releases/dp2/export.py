@@ -30,11 +30,9 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from anyio import to_thread
-
 from ...export.export_data_release import export_data_release
 from ...transform.rewrite_datastore_paths import DatastorePathMapper
-from ...utils.butler_thread_pool import ButlerThreadPool
+from ...utils.butler_process_pool import ButlerProcessPool
 
 # From
 # https://rubinobs.atlassian.net/wiki/spaces/DM/pages/1210908682/All+DP2+data+products
@@ -105,12 +103,8 @@ _MAX_BUTLER_CONNECTIONS = 32
 
 
 async def export_dp2() -> None:
-    # By default, AnyIO only allows 40 concurrent threads total.  Each
-    # synchronous Butler query consumes a thread, and then we need more threads
-    # for miscellaneous file writing I/O.
-    to_thread.current_default_thread_limiter().total_tokens = _MAX_BUTLER_CONNECTIONS * 3
-    async with ButlerThreadPool.from_config("dp2_prep", _MAX_BUTLER_CONNECTIONS) as butler_pool:
-        datastore_mapper = await butler_pool.run_with_butler(
+    async with ButlerProcessPool.from_config("dp2_prep", _MAX_BUTLER_CONNECTIONS) as butler_pool:
+        datastore_mapper = await butler_pool.run_with_butler_in_current_process(
             lambda butler: DatastorePathMapper.from_butler(butler, DATASTORE_MAP)
         )
         await export_data_release(

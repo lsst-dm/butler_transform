@@ -101,3 +101,5 @@ class ButlerThreadPool(ButlerPool):
         async with self.get_butler() as butler:
             task_status.started()
             return await to_thread.run_sync(func, butler, *args)
+
+    run_with_butler_in_current_process = run_with_butler
