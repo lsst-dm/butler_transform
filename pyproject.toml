@@ -4,6 +4,7 @@ version = "0.1.0"
 requires-python = ">= 3.13.0"
 dependencies = [
     "anyio",
+    "duckdb>=1.5.3",
     "lsst-daf-butler",
     "pyarrow",
     "rich>=15.0.0",
