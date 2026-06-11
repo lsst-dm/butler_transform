@@ -4,7 +4,9 @@ version = "0.1.0"
 requires-python = ">= 3.13.0"
 dependencies = [
     "anyio",
+    "backoff>=2.2.1",
     "duckdb>=1.5.3",
+    "google-cloud-storage>=3.11.0",
     "lsst-daf-butler",
     "pyarrow",
     "rich>=15.0.0",
@@ -66,6 +68,7 @@ plugins = "pydantic.mypy"
 
 [[tool.mypy.overrides]]
 module = [
-    "pyarrow.*"
+    "pyarrow.*",
+    "google.cloud.storage"
 ]
 ignore_missing_imports = true
