@@ -78,15 +78,10 @@ DATASET_TYPES = (
     "skyMap",
     "standard_passband",
     # Provenance
-    "*_metadata",
     "run_provenance",
 )
 
-COLLECTIONS = (
-    "LSSTCam/runs/DRP/DP2-pilot/v30_0_4_rc1/DM-54210/stage4",
-    "LSSTCam/runs/DRP/DP2-pilot/v30_0_4_rc1/DM-54210/stage3",
-    "LSSTCam/runs/DRP/DP2/v30_0_0/DM-53881/stage2",
-)
+COLLECTIONS = ("LSSTCam/runs/DRP/DP2",)
 
 
 _MAX_BUTLER_CONNECTIONS = 32
