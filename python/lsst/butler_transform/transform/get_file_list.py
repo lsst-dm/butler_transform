@@ -25,6 +25,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+import tempfile
 from collections.abc import Iterator, Sequence
 
 import duckdb
@@ -33,7 +34,23 @@ import duckdb
 def get_file_list_from_datastore_export(
     datastore_export_files: Sequence[str], batch_size=100_000
 ) -> Iterator[Sequence[str]]:
-    with duckdb.connect() as conn:
+    with (
+        tempfile.TemporaryDirectory(suffix=".duckdb") as tmpdir,
+        duckdb.connect(
+            config={
+                # DuckDB will use up to 80% of system memory if you don't
+                # explicitly set it.
+                "memory_limit": "4GB",
+                # DuckDB will use the current working directory if you don't
+                # set it, which is frequently a small quota-limited volume on
+                # USDF.
+                "temp_directory": tmpdir,
+                # For paranoia -- some of the scratch volumes at USDF are
+                # petabyte-sized.
+                "max_temp_directory_size": "128GB",
+            }
+        ) as conn,
+    ):
         cursor = (
             conn.from_parquet(datastore_export_files).select("split_part(path, '#', 1)").distinct().execute()
         )
