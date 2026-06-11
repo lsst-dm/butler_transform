@@ -25,13 +25,16 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>
 
+from collections.abc import Iterable, Sequence
+
 import click
-from google.cloud.storage import Blob, Bucket, Client, transfer_manager
 
 from ...importer.import_data_release import DataReleaseImportInfo
 from ...transform.get_file_list import get_file_list_from_datastore_export
 from ...transform.rewrite_datastore_paths import map_uri_to_datastore
+from ...utils.mp_context import get_clean_mp_context
 from ._datastore_map import DP2_DATASTORE_MAP
+from ._gcs_copy_worker import GcsCopyWorker
 
 DATASET_TYPES_TO_COPY = ("deep_coadd", "run_provenance")
 DP2_BUCKET_NAME = "butler-us-central1-dp2"
@@ -41,24 +44,26 @@ DP2_GOOGLE_PROJECT = "data-curation-prod-fbdb"
 @click.command
 @click.argument("export_directory")
 def copy_dp2_files_to_google(export_directory: str) -> None:
-    client = Client(project=DP2_GOOGLE_PROJECT)
-    bucket = client.bucket(DP2_BUCKET_NAME)
-
-    datastore_export_files = _get_datastore_export_file_paths(export_directory)
-    total = 0
-    for batch in get_file_list_from_datastore_export(datastore_export_files):
-        print(f"Starting transfer of {len(batch)} files")
-        transfer_pairs = [_get_transfer_pair(uri, bucket) for uri in batch]
-        transfer_manager.upload_many(
-            transfer_pairs,
-            skip_if_exists=True,
-            raise_exception=True,
-            # The default of 8 is too low to max out the 64-core, 256GB RAM,
-            # 100Gbps data transfer nodes this will run on.
-            max_workers=128,
+    # The Google Cloud Storage transfer manager has a built-in process pool
+    # implementation, but it doesn't manage memory well (gigabytes of RAM per process)
+    # and we need >100 concurrent uploads to saturate the outbound transfer from USDF
+    # data transfer nodes.  So fan out to a smaller number of processes, and have each
+    # process do multithreaded transfers.
+    context = get_clean_mp_context()
+    with context.Pool(
+        8, initializer=GcsCopyWorker.initialize, initargs=(DP2_GOOGLE_PROJECT, DP2_BUCKET_NAME)
+    ) as pool:
+        total = 0
+        datastore_export_files = _get_datastore_export_file_paths(export_directory)
+        transfer_batch_iterable = _convert_paths_to_transfer_pairs(
+            get_file_list_from_datastore_export(datastore_export_files, batch_size=1000)
         )
-        total += len(batch)
-        print(f"Completed transfer of {len(batch)} files ({total} total so far)")
+        print("Starting transfer")
+        for batch_size in pool.imap_unordered(
+            GcsCopyWorker.transfer_to_google_cloud_storage, transfer_batch_iterable
+        ):
+            total += batch_size
+            print(f"Transferred {batch_size} files (total {total})")
 
     print("Transfer complete")
 
@@ -77,12 +82,18 @@ def _get_datastore_export_file_paths(export_directory: str) -> list[str]:
     return list(datastore_file_map.values())
 
 
-def _get_transfer_pair(input_uri: str, bucket: Bucket) -> tuple[str, Blob]:
+def _convert_paths_to_transfer_pairs(
+    iterable: Iterable[Iterable[str]],
+) -> Iterable[Sequence[tuple[str, str]]]:
+    for batch in iterable:
+        yield [_get_transfer_pair(uri) for uri in batch]
+
+
+def _get_transfer_pair(input_uri: str) -> tuple[str, str]:
     input_path = input_uri.removeprefix("file://")
     mapped = map_uri_to_datastore(input_uri, DP2_DATASTORE_MAP)
     output_path = f"{mapped['datastore_name']}/{mapped['path']}"
-    output_blob = bucket.blob(output_path)
-    return (input_path, output_blob)
+    return (input_path, output_path)
 
 
 if __name__ == "__main__":
