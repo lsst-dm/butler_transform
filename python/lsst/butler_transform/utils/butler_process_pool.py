@@ -31,8 +31,6 @@ import asyncio
 from collections.abc import AsyncIterator, Callable
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import asynccontextmanager
-from multiprocessing import get_all_start_methods, get_context
-from multiprocessing.context import BaseContext
 from typing import Unpack
 
 from anyio import TASK_STATUS_IGNORED
@@ -42,6 +40,7 @@ from lsst.daf.butler import Butler
 
 from .butler_pool import ButlerPool
 from .butler_thread_pool import ButlerThreadPool
+from .mp_context import get_clean_mp_context
 
 
 class ButlerProcessPool(ButlerPool):
@@ -62,12 +61,7 @@ class ButlerProcessPool(ButlerPool):
     async def from_config(
         repo: str, max_connections: int, writeable: bool = False
     ) -> AsyncIterator[ButlerProcessPool]:
-        context: BaseContext
-        if "forkserver" in get_all_start_methods():
-            context = get_context("forkserver")
-            context.set_forkserver_preload(["lsst.daf.butler"])
-        else:
-            context = get_context("spawn")
+        context = get_clean_mp_context(preload_modules=["lsst.daf.butler"])
 
         async with ButlerThreadPool.from_config(repo, max_connections, writeable) as thread_pool:
             with ProcessPoolExecutor(
