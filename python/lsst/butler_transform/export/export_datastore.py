@@ -27,7 +27,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection
+from collections.abc import Collection
 from pathlib import Path
 
 from anyio import CapacityLimiter, create_memory_object_stream, create_task_group
@@ -38,9 +38,8 @@ from lsst.daf.butler._rubin.datastore_records import DatastoreRecordTable, expor
 
 from ..parquet.datasets import read_dataset_ids
 from ..parquet.datastore import DatastoreParquetWriter
+from ..transform.rewrite_datastore_paths import AbsolutePathMapper
 from ..utils.butler_pool import ButlerPool
-
-type DatastoreTransformFunction = Callable[[DatastoreRecordTable], DatastoreRecordTable]
 
 
 class DatastoreExporter:
@@ -50,16 +49,16 @@ class DatastoreExporter:
     ----------
     butler_pool
         Pool of Butler instances used to fetch data.
-    transform_function, optional
-        Function that will be called to modify each batch of datastore records
-        before writing them to parquet.
+    absolute_uris
+        If `True` (the default), all path URIs in the exported data will be
+        converted to absolute URIs.  If `False`, the exported URIs will be a
+        mix of relative and absolute URIs (whichever format they are stored in
+        the Butler database.)
     """
 
-    def __init__(
-        self, butler_pool: ButlerPool, transform_function: DatastoreTransformFunction | None = None
-    ) -> None:
+    def __init__(self, butler_pool: ButlerPool, absolute_uris: bool = True) -> None:
         self._butler_pool = butler_pool
-        self._transform_function = transform_function
+        self._absolute_uris = absolute_uris
         self._limiter = CapacityLimiter(self._butler_pool.max_connections)
 
     async def export_from_dataset_parquet(
@@ -114,18 +113,18 @@ class DatastoreExporter:
             records = await self._butler_pool.run_with_butler(
                 _export_and_transform_datastore_records,
                 dataset_ids,
-                self._transform_function,
+                self._absolute_uris,
                 task_status=task_status,
             )
             await output.send(records)
 
 
 def _export_and_transform_datastore_records(
-    butler: Butler, dataset_ids: Collection[DatasetId], transform_function: DatastoreTransformFunction | None
+    butler: Butler, dataset_ids: Collection[DatasetId], absolute_uris: bool
 ) -> DatastoreRecordTable:
     records = export_datastore_records_table(butler, dataset_ids)
-    if transform_function is not None:
-        records = transform_function(records)
+    if absolute_uris:
+        records = AbsolutePathMapper.from_butler(butler).make_paths_absolute(records)
     return records
 
 

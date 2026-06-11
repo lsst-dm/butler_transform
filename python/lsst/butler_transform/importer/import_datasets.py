@@ -30,6 +30,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Sized
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Callable, Literal
 
@@ -37,7 +38,7 @@ from anyio import create_task_group
 from anyio.abc import TaskStatus
 
 from lsst.daf.butler import Butler, DatasetRef, DatasetType
-from lsst.daf.butler._rubin.datastore_records import import_datastore_records_table
+from lsst.daf.butler._rubin.datastore_records import DatastoreRecordTable, import_datastore_records_table
 
 from ..parquet.async_parquet_reader import TableReaderBase
 from ..parquet.datasets import DatasetRefTable, DatasetsParquetReader
@@ -70,6 +71,11 @@ type DatasetImportEvent = DatasetImportStartedEvent | DatasetImportProgressEvent
 
 type DatasetImportEventCallback = Callable[[DatasetImportEvent], None]
 
+type DatastoreTransformFunction = Callable[[DatastoreRecordTable], DatastoreRecordTable]
+"""Function that will be called to modify each batch of datastore records
+before importing them to the Butler.
+"""
+
 
 class DatasetImporter:
     """Imports Butler datasets and associated datastore information."""
@@ -93,10 +99,12 @@ class DatasetImporter:
         self,
         input_file: Path,
         event_callback: DatasetImportEventCallback,
+        transform_function: DatastoreTransformFunction | None = None,
     ) -> None:
         """Import datastore records from the given parquet file."""
+        import_func = partial(_import_datastore, transform_function=transform_function)
         async with DatastoreParquetReader(input_file) as reader:
-            await self._do_import(reader, event_callback, import_datastore_records_table)
+            await self._do_import(reader, event_callback, import_func)
 
     async def _do_import[T: Sized](
         self,
@@ -146,3 +154,11 @@ def _import_datasets(butler: Butler, table: DatasetRefTable):
             # path with reduced checks for the insert.
             assume_new=True,
         )
+
+
+def _import_datastore(
+    butler: Butler, table: DatastoreRecordTable, transform_function: DatastoreTransformFunction | None
+) -> None:
+    if transform_function is not None:
+        table = transform_function(table)
+    import_datastore_records_table(butler, table)
