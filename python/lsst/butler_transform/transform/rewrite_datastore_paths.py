@@ -169,6 +169,14 @@ def map_absolute_uris_to_datastores(
     return rewrite_datastore_and_path(table, partial(_map_uris_to_datastores, datastore_map=datastore_map))
 
 
+def map_uri_to_datastore(uri: str, datastore_map: dict[str, str]) -> DatastoreNameAndPath:
+    for prefix, datastore_name in datastore_map.items():
+        if uri.startswith(prefix):
+            return {"datastore_name": datastore_name, "path": uri.removeprefix(prefix).lstrip("/")}
+
+    raise ValueError(f"No datastore mapping configured for URI {uri}")
+
+
 def _map_uris_to_datastores(rows: Sequence[DatastoreNameAndPath], datastore_map: dict[str, str]) -> None:
     """Modifies the input in place.  Converts all paths to relative paths, and
     assigns datastore names based on the ``datastore_map`` parameter.
@@ -182,18 +190,8 @@ def _map_uris_to_datastores(rows: Sequence[DatastoreNameAndPath], datastore_map:
         ``{ "file://some_root/": "datastore_name" }``, used to assign paths
         to datastores and convert them to relative paths.
     """
-    lookup = tuple(datastore_map.items())
     for row in rows:
-        match_found = False
-        path = row["path"]
-        for prefix, datastore_name in lookup:
-            if path.startswith(prefix):
-                row["datastore_name"] = datastore_name
-                row["path"] = path.removeprefix(prefix).lstrip("/")
-                match_found = True
-                break
-        if not match_found:
-            raise ValueError(f"No datastore mapping configured for URI {path}")
+        row.update(map_uri_to_datastore(row["path"], datastore_map))
 
 
 def _get_datastore_roots_from_butler(butler: Butler) -> dict[str, str]:
