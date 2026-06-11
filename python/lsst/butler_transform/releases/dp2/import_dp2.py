@@ -31,10 +31,11 @@ from tempfile import TemporaryDirectory
 import click
 
 from lsst.daf.butler import Butler, Config
+from lsst.daf.butler._rubin.datastore_records import DatastoreRecordTable
 
 from ...importer.import_data_release import DataReleaseImportInfo, import_data_release
-
-_DATASTORES = ("dp2", "calib", "refcats", "raw")
+from ...transform.rewrite_datastore_paths import map_absolute_uris_to_datastores
+from ._datastore_map import DP2_DATASTORE_MAP
 
 
 @click.command
@@ -50,14 +51,15 @@ def import_dp2(export_directory: str, database_uri: str, schema: str | None) -> 
             config["registry", "namespace"] = schema
 
         config["datastore", "cls"] = "lsst.daf.butler.datastores.chainedDatastore.ChainedDatastore"
+        datastores = set(DP2_DATASTORE_MAP.values())
         config["datastore", "datastores"] = [
-            _generate_datastore_config(datastore_name) for datastore_name in _DATASTORES
+            _generate_datastore_config(datastore_name) for datastore_name in datastores
         ]
 
         repo_config = Butler.makeRepo(butler_repo, config, dimensionConfig=import_info.get_dimension_config())
         repo_config.dumpToUri("dp2-butler-config.yaml")
 
-        asyncio.run(import_data_release(butler_repo, import_info))
+        asyncio.run(import_data_release(butler_repo, import_info, _map_files_to_dp2_datastores))
 
 
 def _generate_datastore_config(datastore_name: str) -> dict:
@@ -68,6 +70,15 @@ def _generate_datastore_config(datastore_name: str) -> dict:
             "records": {"table": f"{datastore_name}_datastore_records"},
         }
     }
+
+
+def _map_files_to_dp2_datastores(table: DatastoreRecordTable) -> DatastoreRecordTable:
+    """Convert the absolute paths in the datastore dump to relative paths,
+    splitting the datasets up among multiple Butler datastores.  Each of these
+    datastores corresponds to an S3 bucket that will serve the files to end
+    users.
+    """
+    return map_absolute_uris_to_datastores(table, DP2_DATASTORE_MAP)
 
 
 if __name__ == "__main__":

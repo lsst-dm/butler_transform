@@ -35,7 +35,6 @@ from pyarrow.parquet import read_table
 
 from lsst.butler_transform.export.export_data_release import export_data_release
 from lsst.butler_transform.importer.import_data_release import DataReleaseImportInfo, import_data_release
-from lsst.butler_transform.transform.rewrite_datastore_paths import DatastorePathMapper
 from lsst.butler_transform.utils.butler_process_pool import ButlerProcessPool
 from lsst.daf.butler import Butler, CollectionType, DatasetType
 
@@ -68,12 +67,6 @@ class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
             async with ButlerProcessPool.from_config(self.repo, 16) as butler_pool:
-                datastore_mapper = DatastorePathMapper.from_butler(
-                    butler,
-                    # Remap all files as absolute paths in the default Butler
-                    # datastore.
-                    {"": "FileDatastore@<butlerRoot>"},
-                )
                 # dt2 is passed as a glob to verify that we expand globs.  We do
                 # not explicitly pass in the collection "runs/def", instead using a
                 # tagged collection to pull in "ref2".
@@ -82,7 +75,6 @@ class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
                     tmpdir_path,
                     ["dt1", "d*2", "dt3"],
                     ["runs/abc", "tag"],
-                    datastore_transform_function=datastore_mapper.remap,
                 )
 
             dt1_datasets = read_table(tmpdir_path.joinpath("dt1.datasets.parquet")).to_pylist()
@@ -216,6 +208,9 @@ class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
                 for ref in [ref1, ref2, ref3]:
                     self.assertEqual(import_butler.get_dataset(ref.id), ref)
 
+                # The export process implicitly converts URIs to absolute
+                # paths, so these gets use files from their original location
+                # in the original Butler.
                 self.assertEqual(import_butler.get(ref1), 1)
                 self.assertEqual(import_butler.get(ref2), 20)
                 self.assertEqual(import_butler.get(ref3), 3)
