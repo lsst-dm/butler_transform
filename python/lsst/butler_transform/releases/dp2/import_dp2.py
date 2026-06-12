@@ -31,54 +31,42 @@ from tempfile import TemporaryDirectory
 import click
 
 from lsst.daf.butler import Butler, Config
-from lsst.daf.butler._rubin.datastore_records import DatastoreRecordTable
 
 from ...importer.import_data_release import DataReleaseImportInfo, import_data_release
-from ...transform.rewrite_datastore_paths import map_absolute_uris_to_datastores
-from ._datastore_map import DP2_DATASTORE_MAP
+from ._datastore_map import generate_dp2_datastore_config, map_files_to_dp2_datastores
+
+DP2_MINI_DATASET_TYPES = ("deep_coadd", "run_provenance")
+"""Dataset types included in the "mini" DP2, the data "preview preview" that
+will be released ahead of the full release.
+"""
 
 
 @click.command
 @click.argument("export_directory")
+@click.argument("schema")
 @click.argument("database_uri")
-@click.option("--schema", default=None)
-def import_dp2(export_directory: str, database_uri: str, schema: str | None) -> None:
+@click.option("--mini", is_flag=True)
+def import_dp2(export_directory: str, schema: str, database_uri: str, mini: bool) -> None:
     import_info = DataReleaseImportInfo(export_directory)
     with TemporaryDirectory() as butler_repo:
         config = Config()
         config["registry", "db"] = database_uri
-        if schema is not None:
-            config["registry", "namespace"] = schema
-
-        config["datastore", "cls"] = "lsst.daf.butler.datastores.chainedDatastore.ChainedDatastore"
-        datastores = set(DP2_DATASTORE_MAP.values())
-        config["datastore", "datastores"] = [
-            _generate_datastore_config(datastore_name) for datastore_name in datastores
-        ]
+        config["registry", "namespace"] = schema
+        config["datastore"] = generate_dp2_datastore_config()
 
         repo_config = Butler.makeRepo(butler_repo, config, dimensionConfig=import_info.get_dimension_config())
         repo_config.dumpToUri("dp2-butler-config.yaml")
 
-        asyncio.run(import_data_release(butler_repo, import_info, _map_files_to_dp2_datastores))
+        dataset_types = DP2_MINI_DATASET_TYPES if mini else None
 
-
-def _generate_datastore_config(datastore_name: str) -> dict:
-    return {
-        "datastore": {
-            "cls": "lsst.daf.butler.datastores.fileDatastore.FileDatastore",
-            "name": datastore_name,
-            "records": {"table": f"{datastore_name}_datastore_records"},
-        }
-    }
-
-
-def _map_files_to_dp2_datastores(table: DatastoreRecordTable) -> DatastoreRecordTable:
-    """Convert the absolute paths in the datastore dump to relative paths,
-    splitting the datasets up among multiple Butler datastores.  Each of these
-    datastores corresponds to an S3 bucket that will serve the files to end
-    users.
-    """
-    return map_absolute_uris_to_datastores(table, DP2_DATASTORE_MAP)
+        asyncio.run(
+            import_data_release(
+                butler_repo,
+                import_info,
+                dataset_types=dataset_types,
+                datastore_transform_function=map_files_to_dp2_datastores,
+            )
+        )
 
 
 if __name__ == "__main__":
