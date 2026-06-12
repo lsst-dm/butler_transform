@@ -25,6 +25,12 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>
 
+from __future__ import annotations
+
+from lsst.daf.butler._rubin.datastore_records import DatastoreRecordTable
+
+from ...transform.rewrite_datastore_paths import map_absolute_uris_to_datastores
+
 DP2_DATASTORE_MAP = {
     "file:///sdf/group/rubin/repo/dp2_prep": "dp2",
     # This is a rucio alias for /sdf/data/rubin/repo/main_20210215/LSSTCam/calib
@@ -37,3 +43,30 @@ Storage locations used by the `dp2_prep` Butler repository at USDF, as a
 mapping from physical paths to virtual "datastore" names corresponding to S3
 buckets used to serve them.
 """
+
+
+def generate_dp2_datastore_config() -> dict:
+    datastores = set(DP2_DATASTORE_MAP.values())
+    return {
+        "cls": "lsst.daf.butler.datastores.chainedDatastore.ChainedDatastore",
+        "datastores": [_generate_file_datastore_config(datastore_name) for datastore_name in datastores],
+    }
+
+
+def _generate_file_datastore_config(datastore_name: str) -> dict:
+    return {
+        "datastore": {
+            "cls": "lsst.daf.butler.datastores.fileDatastore.FileDatastore",
+            "name": datastore_name,
+            "records": {"table": f"{datastore_name}_datastore_records"},
+        }
+    }
+
+
+def map_files_to_dp2_datastores(table: DatastoreRecordTable) -> DatastoreRecordTable:
+    """Convert the absolute paths in the datastore dump to relative paths,
+    splitting the datasets up among multiple Butler datastores.  Each of these
+    datastores corresponds to an S3 bucket that will serve the files to end
+    users.
+    """
+    return map_absolute_uris_to_datastores(table, DP2_DATASTORE_MAP)
