@@ -70,16 +70,10 @@ def copy_dp2_files_to_google(export_directory: str) -> None:
 
 def _get_datastore_export_file_paths(export_directory: str) -> list[str]:
     import_info = DataReleaseImportInfo(export_directory)
-    datastore_file_map = {
-        info.dataset_type.name: str(info.datastore_export_file)
-        for info in import_info.get_dataset_inputs()
-        if info.dataset_type.name in DATASET_TYPES_TO_COPY
-    }
-    missing = set(DATASET_TYPES_TO_COPY) - set(datastore_file_map.keys())
-    if missing:
-        raise ValueError(f"Requested dataset types not in exported data: {missing}")
-
-    return list(datastore_file_map.values())
+    return [
+        str(info.datastore_export_file)
+        for info in import_info.get_dataset_inputs(subset=DATASET_TYPES_TO_COPY)
+    ]
 
 
 def _convert_paths_to_transfer_pairs(
