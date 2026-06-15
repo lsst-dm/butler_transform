@@ -27,20 +27,17 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterable
 from pathlib import Path
 
-from anyio import create_task_group, open_file
+from anyio import open_file
 from pydantic import BaseModel
 
-from lsst.daf.butler import Butler, CollectionType, DatasetType, SerializedDatasetType
-
-from ..export.export_datasets import export_datasets
+from ..export.export_datasets import DatasetExporter, DatasetExportManifest
 from ..export.export_dimension_records import export_dimension_records
 from ..parquet.collections import CollectionsParquetWriter
 from ..utils.butler_pool import ButlerPool
-from ..utils.task_limiter import TaskLimiter
-from .export_datastore import DatastoreExporter
 
 
 async def export_data_release(
@@ -64,100 +61,34 @@ async def export_data_release(
 
     Path(output_directory).mkdir(exist_ok=True)
 
-    resolved_dataset_types = await butler_pool.run_with_butler(_resolve_dataset_types, dataset_types)
-
-    # Snapshot the set of collections that we will be querying against.
-    resolved_collections = await butler_pool.run_with_butler_in_current_process(
-        lambda butler: butler.collections.query_info(
-            collections, include_chains=True, flatten_chains=True, include_doc=True
-        )
-    )
-    # Drop chained collections to get only the concrete collections we will search for.
-    search_collections = [c.name for c in resolved_collections if c.type != CollectionType.CHAINED]
-
-    # Each individual export task should saturate at least one Butler
-    # connection, so limit the concurrency to prevent other resources (e.g.
-    # memory and file handles) from being exhausted.
-    limiter = TaskLimiter(butler_pool.max_connections)
     dimensions = await butler_pool.run_with_butler_in_current_process(lambda butler: butler.dimensions)
-    async with create_task_group() as tg:
+    async with asyncio.TaskGroup() as tg:
         dimension_record_export_files: dict[str, str] = {}
         for el in dimensions.elements:
             if el.has_own_table:
                 filename = f"{el.name}.dimension.parquet"
                 dimension_record_export_files[el.name] = filename
-                tg.start_soon(
-                    limiter.limit,
+                tg.create_task(
                     export_dimension_records(butler_pool, el, output_directory.joinpath(filename)),
                 )
 
-        # Datasets found via tagged collections may reference run collections that are not present
-        # in the initial list of collections, so accumulate a list of all collections encountered
-        # during export.
-        run_collections_found: set[str] = set()
-        dataset_manifests: list[DatasetExportManifest] = []
+        dataset_exporter = DatasetExporter(butler_pool, output_directory)
+        dataset_export_task = tg.create_task(dataset_exporter.export(dataset_types, collections))
 
-        datastore_exporter = DatastoreExporter(butler_pool)
-
-        async def _export_datasets(dataset_type: DatasetType, manifest: DatasetExportManifest):
-            dataset_path = output_directory.joinpath(manifest.dataset_export_file)
-            async with limiter.limiter:
-                export_result = await export_datasets(
-                    butler_pool,
-                    dataset_type,
-                    search_collections,
-                    dataset_path,
-                )
-                run_collections_found.update(export_result.run_collections_found)
-                await datastore_exporter.export_from_dataset_parquet(
-                    dataset_path,
-                    output_directory.joinpath(manifest.datastore_export_file),
-                )
-            print(f"{dataset_type.name}: complete")
-
-        for dt in resolved_dataset_types:
-            dataset_filename = f"{dt.name}.datasets.parquet"
-            datastore_filename = f"{dt.name}.datastore.parquet"
-            dataset_manifest = DatasetExportManifest(
-                dataset_type=dt.to_simple(),
-                dataset_export_file=dataset_filename,
-                datastore_export_file=datastore_filename,
-            )
-            dataset_manifests.append(dataset_manifest)
-            tg.start_soon(_export_datasets, dt, dataset_manifest)
+    dataset_export_result = dataset_export_task.result()
 
     collection_filename = "collections.parquet"
     async with CollectionsParquetWriter(output_directory.joinpath(collection_filename)) as collection_writer:
-        await collection_writer.write(resolved_collections)
-        extra_run_collections = run_collections_found - set([c.name for c in resolved_collections])
-        if extra_run_collections:
-            extra_collection_info = await butler_pool.run_with_butler_in_current_process(
-                lambda butler: butler.collections.query_info(extra_run_collections, include_doc=True)
-            )
-            await collection_writer.write(extra_collection_info)
+        await collection_writer.write(dataset_export_result.collections_referenced)
 
     manifest = DataReleaseExportManifest(
         collection_export_file=collection_filename,
         dimension_config=dimensions.dimensionConfig.dump(),
         dimension_record_files=dimension_record_export_files,
-        datasets=dataset_manifests,
+        datasets=dataset_export_result.manifests,
     )
     async with await open_file(output_directory.joinpath("manifest.json"), "wb") as fh:
         await fh.write(manifest.model_dump_json(indent=2).encode("utf-8"))
-
-
-def _resolve_dataset_types(butler: Butler, dataset_types: Iterable[str]) -> tuple[DatasetType, ...]:
-    missing_dataset_types: list[str] = []
-    resolved_dataset_types = tuple(
-        butler.registry.queryDatasetTypes(
-            dataset_types,
-            missing=missing_dataset_types,
-        )
-    )
-    if missing_dataset_types:
-        raise RuntimeError(f"Required dataset types not present in repository: {missing_dataset_types}")
-
-    return resolved_dataset_types
 
 
 class DataReleaseExportManifest(BaseModel):
@@ -173,18 +104,3 @@ class DataReleaseExportManifest(BaseModel):
     """
     datasets: list[DatasetExportManifest]
     """Information about exported datasets."""
-
-
-class DatasetExportManifest(BaseModel):
-    """Manifest for a single dataset type in the data release export."""
-
-    dataset_type: SerializedDatasetType
-    """Dataset type definition."""
-    dataset_export_file: str
-    """Path to parquet file containing the exported
-    `lsst.daf.butler.DatasetRef` dataset records.
-    """
-    datastore_export_file: str
-    """Path to parquet file containing the exported Butler datastore
-    records.
-    """
