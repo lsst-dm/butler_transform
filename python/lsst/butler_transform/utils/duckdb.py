@@ -25,35 +25,32 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-from collections.abc import Iterator, Sequence
+from __future__ import annotations
 
-from ..utils.duckdb import initialize_duckdb_connection
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
+
+from duckdb import DuckDBPyConnection, connect
 
 
-def get_file_list_from_datastore_export(
-    datastore_export_files: Sequence[str], batch_size=100_000
-) -> Iterator[Sequence[str]]:
-    """Retrieve the list of URIs to artifact files represented by a given set
-    of datastore records.  The list is de-duplicated and paths have URI
-    fragments removed, so the output contains one entry for each physical file
-    (rather than one entry for each input datastore record.)
-
-    Parameters
-    ----------
-    datastore_export_files
-        List of paths to exported datastore parquet files that filenames will
-        be loaded from.
-    batch_size
-        Chunk size for the batches of returned filenames.
-
-    Yields
-    -------
-    batch
-        A list of filenames, no larger than the given ``batch_size``.
-    """
-    with initialize_duckdb_connection() as conn:
-        cursor = (
-            conn.from_parquet(datastore_export_files).select("split_part(path, '#', 1)").distinct().execute()
-        )
-        while batch := cursor.fetchmany(batch_size):
-            yield [row[0] for row in batch]
+@contextmanager
+def initialize_duckdb_connection(memory_limit: str = "4GB") -> Iterator[DuckDBPyConnection]:
+    with (
+        tempfile.TemporaryDirectory(suffix=".duckdb") as tmpdir,
+        connect(
+            config={
+                # DuckDB will use up to 80% of system memory if you don't
+                # explicitly set it.
+                "memory_limit": memory_limit,
+                # DuckDB will use the current working directory if you don't
+                # set it, which is frequently a small quota-limited volume on
+                # USDF.
+                "temp_directory": tmpdir,
+                # For paranoia -- some of the scratch volumes at USDF are
+                # petabyte-sized.
+                "max_temp_directory_size": "128GB",
+            }
+        ) as conn,
+    ):
+        yield conn
