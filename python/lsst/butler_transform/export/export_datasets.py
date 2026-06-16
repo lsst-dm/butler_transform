@@ -36,9 +36,16 @@ from anyio import CapacityLimiter, create_task_group
 from anyio.abc import TaskStatus
 from pydantic import BaseModel
 
-from lsst.daf.butler import Butler, CollectionInfo, CollectionType, DatasetType, SerializedDatasetType
+from lsst.daf.butler import (
+    Butler,
+    CollectionInfo,
+    CollectionType,
+    DatasetAssociation,
+    DatasetType,
+    SerializedDatasetType,
+)
 
-from ..parquet.datasets import DatasetRefTable, DatasetsParquetWriter
+from ..parquet.datasets import DatasetAssociationParquetWriter, DatasetRefTable, DatasetsParquetWriter
 from ..utils.butler_pool import ButlerPool
 from .export_datastore import DatastoreExporter
 
@@ -63,8 +70,15 @@ class DatasetExporter:
         )
         # Drop chained collections to get only the concrete collections we will search for.
         search_collections = [c.name for c in resolved_collections if c.type != CollectionType.CHAINED]
+        association_collections = [
+            c.name
+            for c in resolved_collections
+            if (c.type == CollectionType.CALIBRATION or c.type == CollectionType.TAGGED)
+        ]
 
-        context = _DatasetExportContext(search_collections)
+        context = _DatasetExportContext(
+            search_collections=search_collections, association_collections=association_collections
+        )
         async with create_task_group() as tg:
             for dt in resolved_dataset_types:
                 await tg.start(self._export_single_dataset_type, context, dt)
@@ -83,7 +97,6 @@ class DatasetExporter:
     ) -> None:
         async with self._limiter:
             task_status.started()
-
             manifest = context.add_manifest(dataset_type)
             dataset_parquet_path = self._output_directory.joinpath(manifest.dataset_export_file)
             run_collections_found = await self._butler_pool.run_with_butler(
@@ -94,10 +107,19 @@ class DatasetExporter:
             )
             context.add_found_run_collections(run_collections_found)
 
-            await self._datastore_exporter.export_from_dataset_parquet(
-                dataset_parquet_path,
-                self._output_directory.joinpath(manifest.datastore_export_file),
-            )
+            async with create_task_group() as tg:
+                tg.start_soon(
+                    self._datastore_exporter.export_from_dataset_parquet,
+                    dataset_parquet_path,
+                    self._output_directory.joinpath(manifest.datastore_export_file),
+                )
+                tg.start_soon(
+                    self._butler_pool.run_with_butler,
+                    _export_associations_sync,
+                    dataset_type,
+                    context.association_collections,
+                    self._output_directory.joinpath(manifest.association_export_file),
+                )
         print(f"{dataset_type.name}: complete")
 
 
@@ -127,21 +149,28 @@ class DatasetExportManifest(BaseModel):
     """Path to parquet file containing the exported Butler datastore
     records.
     """
+    association_export_file: str
+    """Path to parquet file containing the association of datasets with tag and
+    calibration collections.
+    """
 
 
 class _DatasetExportContext:
-    def __init__(self, search_collections: Iterable[str]) -> None:
+    def __init__(self, search_collections: Iterable[str], association_collections: Iterable[str]) -> None:
         self.search_collections = tuple(search_collections)
+        self.association_collections = tuple(association_collections)
         self.run_collections_found = set[str]()
         self.manifests = list[DatasetExportManifest]()
 
     def add_manifest(self, dataset_type: DatasetType) -> DatasetExportManifest:
         dataset_filename = f"{dataset_type.name}.datasets.parquet"
         datastore_filename = f"{dataset_type.name}.datastore.parquet"
+        association_filename = f"{dataset_type.name}.association.parquet"
         manifest = DatasetExportManifest(
             dataset_type=dataset_type.to_simple(),
             dataset_export_file=dataset_filename,
             datastore_export_file=datastore_filename,
+            association_export_file=association_filename,
         )
         self.manifests.append(manifest)
         return manifest
@@ -194,3 +223,24 @@ def _export_datasets_sync(
             writer.add_refs_sync(table)
             print(f"{dataset_type}: {len(table)} datasets")
     return run_collections_found
+
+
+def _export_associations_sync(
+    butler: Butler,
+    dataset_type: DatasetType,
+    collections: Iterable[str],
+    output_parquet_path: Path,
+) -> None:
+    with (
+        DatasetAssociationParquetWriter(output_parquet_path, dataset_type) as writer,
+        butler.query() as query,
+    ):
+        query = query.join_dataset_search(dataset_type, collections)
+        result = query.general(
+            dataset_type.dimensions,
+            dataset_fields={dataset_type.name: {"dataset_id", "run", "collection", "timespan"}},
+            find_first=False,
+        )
+        associations = DatasetAssociation.from_query_result(result, dataset_type)
+        for batch in batched(associations, 50_000):
+            writer.add_associations_sync(batch)
