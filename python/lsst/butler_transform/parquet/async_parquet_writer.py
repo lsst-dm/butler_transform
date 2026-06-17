@@ -35,6 +35,8 @@ import pyarrow
 from anyio import CancelScope, to_thread
 from pyarrow.parquet import ParquetWriter
 
+DEFAULT_COMPRESSION = "ZSTD"
+
 
 class AsyncParquetWriter(AbstractAsyncContextManager, AbstractContextManager):
     """Async wrapper around `pyarrow.parquet.ParquetWriter`.
@@ -67,7 +69,7 @@ class AsyncParquetWriter(AbstractAsyncContextManager, AbstractContextManager):
     def __enter__(self) -> Self:
         if self._writer is not None:
             raise AssertionError("AsyncParquetWriter context should only be entered once.")
-        self._writer = ParquetWriter(self._output_path, self._schema, compression="ZSTD")
+        self._writer = ParquetWriter(self._output_path, self._schema, compression=DEFAULT_COMPRESSION)
         return self
 
     async def write_batch(self, batch: pyarrow.RecordBatch) -> None:

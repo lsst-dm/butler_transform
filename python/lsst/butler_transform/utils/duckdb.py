@@ -28,14 +28,25 @@
 from __future__ import annotations
 
 import tempfile
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager
+from pathlib import Path
+from typing import Unpack
 
-from duckdb import DuckDBPyConnection, connect
+import pyarrow
+from anyio import TASK_STATUS_IGNORED, CapacityLimiter, to_thread
+from anyio.abc import TaskStatus
+from duckdb import DuckDBPyConnection, DuckDBPyRelation, connect
+from pyarrow.parquet import ParquetWriter
+
+from ..parquet.async_parquet_writer import DEFAULT_COMPRESSION
 
 
 @contextmanager
 def initialize_duckdb_connection(memory_limit: str = "4GB") -> Iterator[DuckDBPyConnection]:
+    """Set up an in-memory DuckDB database, applying a memory limit and using
+    the system tempdir for its working directory.
+    """
     with (
         tempfile.TemporaryDirectory(suffix=".duckdb") as tmpdir,
         connect(
@@ -54,3 +65,71 @@ def initialize_duckdb_connection(memory_limit: str = "4GB") -> Iterator[DuckDBPy
         ) as conn,
     ):
         yield conn
+
+
+class DuckDbPool:
+    """Utility class for using DuckDB from async code and limiting the number
+    of concurrent threads using it, to reduce buffer and CPU contention.
+
+    Notes
+    -----
+    Users should usually call ``DuckDbPool.initialize()`` instead of calling
+    constructing this class directly.
+    """
+
+    def __init__(self, connection: DuckDBPyConnection, max_connections) -> None:
+        self._connection = connection
+        self._capacity_limiter = CapacityLimiter(max_connections)
+
+    @staticmethod
+    @asynccontextmanager
+    async def initialize(*, memory_limit: str = "4GB", max_connections=4) -> AsyncIterator[DuckDbPool]:
+        """Set up an in-memory DuckDB database instance and return a pool
+        configured to use it.
+        """
+        with initialize_duckdb_connection(memory_limit) as conn:
+            yield DuckDbPool(conn, max_connections)
+
+    async def run_with_duckdb[*P, T](
+        self,
+        func: Callable[[DuckDBPyConnection, *P], T],
+        *args: Unpack[P],
+        task_status: TaskStatus = TASK_STATUS_IGNORED,
+    ) -> T:
+        """Wait until a DuckDB connection is available, then run the given
+        function in a thread with the connection instance as the first
+        argument.
+        """
+        async with self._capacity_limiter:
+            task_status.started()
+            return await to_thread.run_sync(self._run, func, *args)
+
+    def _run[*P, T](self, func: Callable[[DuckDBPyConnection, *P], T], *args: Unpack[P]):
+        with self._connection.cursor() as conn:
+            func(conn, *args)
+
+
+def write_duckdb_results_to_parquet(
+    relation: DuckDBPyRelation,
+    output_file: str | Path,
+    schema: pyarrow.Schema | None = None,
+    row_group_size=100_000,
+):
+    """Write DuckDB results to a Parquet file with the given schema and row
+    group size.
+
+    Notes
+    -----
+    DuckDB has a built in `to_parquet` method, but it uses a schema inferred
+    from the internal DuckDB table.  The built-in method doesn't support
+    writing the Arrow extension types currently required by some of the columns
+    defined in ``daf_butler``, nor will it apply dictionary encodings by
+    default.
+    """
+    reader = relation.to_arrow_reader(row_group_size)
+    try:
+        with ParquetWriter(output_file, schema, compression=DEFAULT_COMPRESSION) as writer:
+            for batch in reader:
+                writer.write_batch(batch.cast(schema))
+    finally:
+        reader.close()
