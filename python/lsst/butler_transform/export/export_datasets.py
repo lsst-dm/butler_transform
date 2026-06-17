@@ -32,8 +32,10 @@ from collections.abc import Iterable
 from itertools import batched
 from pathlib import Path
 
-from anyio import CapacityLimiter, create_task_group
+from anyio import CapacityLimiter, TemporaryDirectory, create_task_group
 from anyio.abc import TaskStatus
+from duckdb import DuckDBPyConnection
+from pyarrow.parquet import read_schema
 from pydantic import BaseModel
 
 from lsst.daf.butler import (
@@ -47,12 +49,16 @@ from lsst.daf.butler import (
 
 from ..parquet.datasets import DatasetAssociationParquetWriter, DatasetRefTable, DatasetsParquetWriter
 from ..utils.butler_pool import ButlerPool
+from ..utils.duckdb import DuckDbPool, write_duckdb_results_to_parquet
 from .export_datastore import DatastoreExporter
 
 
 class DatasetExporter:
-    def __init__(self, butler_pool: ButlerPool, output_directory: Path | str) -> None:
+    def __init__(
+        self, butler_pool: ButlerPool, duckdb_pool: DuckDbPool, output_directory: Path | str
+    ) -> None:
         self._butler_pool = butler_pool
+        self._duckdb_pool = duckdb_pool
         self._output_directory = Path(output_directory)
         # Prevent file handle and memory exhaustion by limiting the total
         # number of exports running simultaneously.
@@ -114,13 +120,29 @@ class DatasetExporter:
                     self._output_directory.joinpath(manifest.datastore_export_file),
                 )
                 tg.start_soon(
-                    self._butler_pool.run_with_butler,
-                    _export_associations_sync,
+                    self._export_associations,
+                    context,
                     dataset_type,
-                    context.association_collections,
+                    dataset_parquet_path,
                     self._output_directory.joinpath(manifest.association_export_file),
                 )
         print(f"{dataset_type.name}: complete")
+
+    async def _export_associations(
+        self,
+        context: _DatasetExportContext,
+        dataset_type: DatasetType,
+        dataset_parquet_path: Path,
+        output_path: Path,
+    ) -> None:
+        async with TemporaryDirectory() as tempdir:
+            temp_path = Path(tempdir) / "association.parquet"
+            await self._butler_pool.run_with_butler(
+                _export_associations_sync, dataset_type, context.association_collections, temp_path
+            )
+            await self._duckdb_pool.run_with_duckdb(
+                _filter_associations_by_matching_datasets, temp_path, dataset_parquet_path, output_path
+            )
 
 
 @dataclasses.dataclass
@@ -244,3 +266,22 @@ def _export_associations_sync(
         associations = DatasetAssociation.from_query_result(result, dataset_type)
         for batch in batched(associations, 50_000):
             writer.add_associations_sync(batch)
+
+
+def _filter_associations_by_matching_datasets(
+    conn: DuckDBPyConnection,
+    association_parquet_file: Path,
+    dataset_parquet_file: Path,
+    output_parquet_file: Path,
+) -> None:
+    """Generate a new parquet file from the association parquet file, removing
+    rows that do not have corresponding entries in the dataset parquet file,
+    and sorting by collection name.
+    """
+    rel = (
+        conn.from_parquet(str(association_parquet_file))
+        .join(conn.from_parquet(str(dataset_parquet_file)), "dataset_id", how="semi")
+        .order("collection")
+    )
+    schema = read_schema(association_parquet_file)
+    write_duckdb_results_to_parquet(rel, output_parquet_file, schema)
