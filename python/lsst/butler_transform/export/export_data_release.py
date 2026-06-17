@@ -38,6 +38,7 @@ from ..export.export_datasets import DatasetExporter, DatasetExportManifest
 from ..export.export_dimension_records import export_dimension_records
 from ..parquet.collections import CollectionsParquetWriter
 from ..utils.butler_pool import ButlerPool
+from ..utils.duckdb import DuckDbPool
 
 
 async def export_data_release(
@@ -62,18 +63,19 @@ async def export_data_release(
     Path(output_directory).mkdir(exist_ok=True)
 
     dimensions = await butler_pool.run_with_butler_in_current_process(lambda butler: butler.dimensions)
-    async with asyncio.TaskGroup() as tg:
-        dimension_record_export_files: dict[str, str] = {}
-        for el in dimensions.elements:
-            if el.has_own_table:
-                filename = f"{el.name}.dimension.parquet"
-                dimension_record_export_files[el.name] = filename
-                tg.create_task(
-                    export_dimension_records(butler_pool, el, output_directory.joinpath(filename)),
-                )
+    async with DuckDbPool.initialize() as duckdb_pool:
+        async with asyncio.TaskGroup() as tg:
+            dimension_record_export_files: dict[str, str] = {}
+            for el in dimensions.elements:
+                if el.has_own_table:
+                    filename = f"{el.name}.dimension.parquet"
+                    dimension_record_export_files[el.name] = filename
+                    tg.create_task(
+                        export_dimension_records(butler_pool, el, output_directory.joinpath(filename)),
+                    )
 
-        dataset_exporter = DatasetExporter(butler_pool, output_directory)
-        dataset_export_task = tg.create_task(dataset_exporter.export(dataset_types, collections))
+            dataset_exporter = DatasetExporter(butler_pool, duckdb_pool, output_directory)
+            dataset_export_task = tg.create_task(dataset_exporter.export(dataset_types, collections))
 
     dataset_export_result = dataset_export_task.result()
 
