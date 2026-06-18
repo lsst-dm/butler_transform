@@ -36,7 +36,35 @@ from ...utils.mp_context import get_clean_mp_context
 from ._datastore_map import DP2_DATASTORE_MAP
 from ._gcs_copy_worker import GcsCopyWorker
 
-DATASET_TYPES_TO_COPY = ("deep_coadd", "run_provenance")
+DATASET_TYPES_TO_COPY = (
+    "deep_coadd",
+    "run_provenance"
+    # QServ catalogs
+    "object",
+    "isolated_star_stellar_motions",
+    "object_shear_all",
+    "source",
+    "object_forced_source",
+    "dia_object_forced_source",
+    "dia_object",
+    "dia_source",
+    "ss_object",
+    "ss_source",
+    # "current_identifications"
+    # numbered_identifications
+    "visit_table",
+    "visit_detector_table",
+    # Other tables
+    "object_parent",
+    "deepCoadd_*_consolidated_map_*",
+    "object_scarlet_models",
+    "visit_summary",
+    # Refcats/ancillaries
+    "the_monster_20250219",
+    "skyMap",
+    "standard_passband",
+)
+
 DP2_BUCKET_NAME = "butler-us-central1-dp2"
 DP2_GOOGLE_PROJECT = "data-curation-prod-fbdb"
 
