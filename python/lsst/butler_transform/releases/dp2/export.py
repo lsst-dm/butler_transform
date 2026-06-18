@@ -38,13 +38,15 @@ from ...utils.butler_process_pool import ButlerProcessPool
 DATASET_TYPES = (
     # 1.3 Non-image, non-qserv table Butler datasets
     "object_scarlet_models",
+    "visit_summary",
+    # Property maps
+    "deepCoadd_*_consolidated_map_*",
     # 1.4 Image datasets
     "raw",
     "visit_image",
     "deep_coadd",
     "template_coadd",
     "difference_image",
-    # "future_visit_image",  # missing, requested for pilot run only
     # 1.5 QSERV Table Products
     "object",
     "object_parent",
@@ -57,8 +59,8 @@ DATASET_TYPES = (
     "dia_source",
     "ss_object",
     "ss_source",
-    # "current_identifications", missing
-    # "numbered_identifications", missing
+    "current_identifications",
+    "numbered_identifications",
     "visit_table",
     "visit_detector_table",
     # 1.6 Calibration products and ancillary inputs
@@ -71,12 +73,13 @@ DATASET_TYPES = (
     "linearizer",
     "crosstalk",
     "cti",
-    # "illuminationCorrection", missing
+    "illuminationCorrection",
     "ptc",
     "the_monster_20250219",
     "fgcmLookUpTable",
     "skyMap",
     "standard_passband",
+    "pretrainedModelPackage",
     # Provenance
     "run_provenance",
 )
