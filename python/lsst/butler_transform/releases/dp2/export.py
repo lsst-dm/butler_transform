@@ -30,6 +30,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import click
+
 from ...export.export_data_release import export_data_release
 from ...utils.butler_process_pool import ButlerProcessPool
 
@@ -87,8 +89,25 @@ COLLECTIONS = ("LSSTCam/runs/DRP/DP2",)
 _MAX_BUTLER_CONNECTIONS = 32
 
 
-async def export_dp2() -> None:
-    async with ButlerProcessPool.from_config("dp2_prep", _MAX_BUTLER_CONNECTIONS) as butler_pool:
+@click.command
+@click.option(
+    "--repo",
+    # dp2_prep_future and dp2_prep repositories at USDF are the same underlying
+    # repository.  The difference between the two is that dp2_prep_future is
+    # configured to use the new lsst.images file format for deep_coadd images,
+    # while dp2_prep still uses the legacy format.  See DM-55060 for more
+    # information.
+    #
+    # The official DP2 release uses the new file format, so we point at
+    # dp2_prep_future.
+    default="dp2_prep_future",
+)
+def export_dp2(repo: str) -> None:
+    asyncio.run(_export_dp2_async(repo))
+
+
+async def _export_dp2_async(repo: str) -> None:
+    async with ButlerProcessPool.from_config(repo, _MAX_BUTLER_CONNECTIONS) as butler_pool:
         await export_data_release(
             butler_pool,
             output_directory=Path.cwd().joinpath("dp2-export"),
@@ -98,4 +117,4 @@ async def export_dp2() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(export_dp2())
+    export_dp2()
