@@ -35,8 +35,8 @@ from ...transform.rewrite_datastore_paths import map_uri_to_datastore
 from ...utils.mp_context import get_clean_mp_context
 from ._datastore_map import DP2_DATASTORE_MAP
 from ._gcs_copy_worker import GcsCopyWorker
+from ._mini_subset import DP2_MINI_SUBSET
 
-DATASET_TYPES_TO_COPY = ("deep_coadd", "run_provenance")
 DP2_BUCKET_NAME = "butler-us-central1-dp2"
 DP2_GOOGLE_PROJECT = "data-curation-prod-fbdb"
 
@@ -86,8 +86,7 @@ def copy_dp2_files_to_google(export_directory: str) -> None:
 def _get_datastore_export_file_paths(export_directory: str) -> list[str]:
     import_info = DataReleaseImportInfo(export_directory)
     return [
-        str(info.datastore_export_file)
-        for info in import_info.get_dataset_inputs(subset=DATASET_TYPES_TO_COPY)
+        str(info.datastore_export_file) for info in import_info.get_dataset_inputs(subset=DP2_MINI_SUBSET)
     ]
 
 
