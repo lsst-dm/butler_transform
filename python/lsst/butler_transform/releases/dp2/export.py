@@ -61,8 +61,8 @@ DATASET_TYPES = (
     "dia_source",
     "ss_object",
     "ss_source",
-    "current_identifications",
-    "numbered_identifications",
+    # "current_identifications",  missing
+    # "numbered_identifications", missing
     "visit_table",
     "visit_detector_table",
     # 1.6 Calibration products and ancillary inputs
@@ -75,7 +75,7 @@ DATASET_TYPES = (
     "linearizer",
     "crosstalk",
     "cti",
-    "illuminationCorrection",
+    # "illuminationCorrection", missing
     "ptc",
     "the_monster_20250219",
     "fgcmLookUpTable",
