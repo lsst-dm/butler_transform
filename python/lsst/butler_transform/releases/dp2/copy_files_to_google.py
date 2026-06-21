@@ -38,7 +38,7 @@ from ._gcs_copy_worker import GcsCopyWorker
 
 DATASET_TYPES_TO_COPY = (
     "deep_coadd",
-    "run_provenance"
+    "run_provenance",
     # QServ catalogs
     "object",
     "isolated_star_stellar_motions",
