@@ -4,6 +4,7 @@ version = "0.1.0"
 requires-python = ">= 3.13.0"
 dependencies = [
     "anyio",
+    "backoff>=2.2.1",
     "duckdb>=1.5.3",
     "google-cloud-storage>=3.11.0",
     "lsst-daf-butler",

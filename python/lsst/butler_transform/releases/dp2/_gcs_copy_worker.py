@@ -25,37 +25,73 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>
 
+import atexit
 import gc
+import logging
 from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 
-from google.cloud.storage import Bucket, Client, transfer_manager
+import backoff
+from google.api_core.exceptions import RetryError
+from google.cloud.storage import Bucket, Client
+
+_LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class CopyResult:
+    uploaded: int
+    skipped: int
 
 
 class GcsCopyWorker:
     _client: Client | None = None
     _bucket: Bucket
+    _pool: ThreadPoolExecutor
 
     @classmethod
     def initialize(cls, project: str, bucket: str) -> None:
+        logging.basicConfig()
+        _LOGGER.setLevel("INFO")
         cls._client = Client(project=project)
         cls._bucket = cls._client.bucket(bucket)
+        cls._pool = ThreadPoolExecutor(32)
+        atexit.register(cls._pool.shutdown)
 
     @classmethod
-    def transfer_to_google_cloud_storage(cls, path_pairs: Iterable[tuple[str, str]]) -> int:
+    def transfer_to_google_cloud_storage(cls, path_pairs: Iterable[tuple[str, str]]) -> CopyResult:
         if cls._client is None:
             raise AssertionError("Worker was not initialized correctly")
-        blob_pairs = [(pair[0], cls._bucket.blob(pair[1])) for pair in path_pairs]
-        transfer_manager.upload_many(
-            blob_pairs,
-            skip_if_exists=True,
-            raise_exception=True,
-            worker_type=transfer_manager.THREAD,
-            max_workers=16,
-        )
+
+        upload_count = 0
+        skip_count = 0
+        for uploaded in cls._pool.map(cls._upload_file, *zip(*path_pairs)):
+            if uploaded:
+                upload_count += 1
+            else:
+                skip_count += 1
 
         # The GCS transfer seems to do a small number of large allocations with
         # cycles, so garbage collection runs infrequently and memory usage can
         # climb if we don't explicitly clean up after each batch.
         gc.collect()
 
-        return len(blob_pairs)
+        return CopyResult(uploaded=upload_count, skipped=skip_count)
+
+    @classmethod
+    # The GCS module retries internally, but eventually gives up.  For
+    # retryable exceptions, it will raise a RetryError, so we continue
+    # retrying ourselves until it succeeds.
+    @backoff.on_exception(backoff.expo, RetryError, max_value=120, logger=_LOGGER)
+    def _upload_file(cls, source_path: str, destination_path: str) -> bool:
+        blob = cls._bucket.blob(destination_path)
+        # We frequently need to restart/retry this process (due to
+        # infrastructure failures, or because the list of files changed.)
+        # So spend a round-trip to avoid burning bandwidth on files that have
+        # already been sent.
+        if blob.exists(client=cls._client):
+            return False
+
+        blob.upload_from_filename(source_path, client=cls._client)
+        return True

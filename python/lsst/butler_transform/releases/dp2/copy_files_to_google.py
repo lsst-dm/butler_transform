@@ -87,11 +87,11 @@ def copy_dp2_files_to_google(export_directory: str) -> None:
             get_file_list_from_datastore_export(datastore_export_files, batch_size=1000)
         )
         print("Starting transfer")
-        for batch_size in pool.imap_unordered(
+        for result in pool.imap_unordered(
             GcsCopyWorker.transfer_to_google_cloud_storage, transfer_batch_iterable
         ):
-            total += batch_size
-            print(f"Transferred {batch_size} files (total {total})")
+            total += result.uploaded + result.skipped
+            print(f"Transferred {result.uploaded} files, skipped {result.skipped} (total {total})")
 
     print("Transfer complete")
 
