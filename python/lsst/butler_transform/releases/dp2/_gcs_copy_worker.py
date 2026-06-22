@@ -56,7 +56,7 @@ class GcsCopyWorker:
         _LOGGER.setLevel("INFO")
         cls._client = Client(project=project)
         cls._bucket = cls._client.bucket(bucket)
-        cls._pool = ThreadPoolExecutor(32)
+        cls._pool = ThreadPoolExecutor(8)
         atexit.register(cls._pool.shutdown)
 
     @classmethod

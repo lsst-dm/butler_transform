@@ -79,12 +79,12 @@ def copy_dp2_files_to_google(export_directory: str) -> None:
     # process do multithreaded transfers.
     context = get_clean_mp_context()
     with context.Pool(
-        8, initializer=GcsCopyWorker.initialize, initargs=(DP2_GOOGLE_PROJECT, DP2_BUCKET_NAME)
+        32, initializer=GcsCopyWorker.initialize, initargs=(DP2_GOOGLE_PROJECT, DP2_BUCKET_NAME)
     ) as pool:
         total = 0
         datastore_export_files = _get_datastore_export_file_paths(export_directory)
         transfer_batch_iterable = _convert_paths_to_transfer_pairs(
-            get_file_list_from_datastore_export(datastore_export_files, batch_size=1000)
+            get_file_list_from_datastore_export(datastore_export_files, batch_size=100)
         )
         print("Starting transfer")
         for result in pool.imap_unordered(
