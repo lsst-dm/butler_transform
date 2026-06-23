@@ -34,11 +34,7 @@ from lsst.daf.butler import Butler, Config
 
 from ...importer.import_data_release import DataReleaseImportInfo, import_data_release
 from ._datastore_map import generate_dp2_datastore_config, map_files_to_dp2_datastores
-
-DP2_MINI_DATASET_TYPES = ("deep_coadd", "run_provenance")
-"""Dataset types included in the "mini" DP2, the data "preview preview" that
-will be released ahead of the full release.
-"""
+from ._mini_subset import DP2_MINI_SUBSET
 
 
 @click.command
@@ -57,7 +53,7 @@ def import_dp2(export_directory: str, schema: str, database_uri: str, mini: bool
         repo_config = Butler.makeRepo(butler_repo, config, dimensionConfig=import_info.get_dimension_config())
         repo_config.dumpToUri("dp2-butler-config.yaml")
 
-        dataset_types = DP2_MINI_DATASET_TYPES if mini else None
+        dataset_types = DP2_MINI_SUBSET if mini else None
 
         asyncio.run(
             import_data_release(

@@ -35,35 +35,7 @@ from ...transform.rewrite_datastore_paths import map_uri_to_datastore
 from ...utils.mp_context import get_clean_mp_context
 from ._datastore_map import DP2_DATASTORE_MAP
 from ._gcs_copy_worker import GcsCopyWorker
-
-DATASET_TYPES_TO_COPY = (
-    "deep_coadd",
-    "run_provenance",
-    # QServ catalogs
-    "object",
-    "isolated_star_stellar_motions",
-    "object_shear_all",
-    "source",
-    "object_forced_source",
-    "dia_object_forced_source",
-    "dia_object",
-    "dia_source",
-    "ss_object",
-    "ss_source",
-    # "current_identifications"
-    # numbered_identifications
-    "visit_table",
-    "visit_detector_table",
-    # Other tables
-    "object_parent",
-    "deepCoadd_*_consolidated_map_*",
-    "object_scarlet_models",
-    "visit_summary",
-    # Refcats/ancillaries
-    "the_monster_20250219",
-    "skyMap",
-    "standard_passband",
-)
+from ._mini_subset import DP2_MINI_SUBSET
 
 DP2_BUCKET_NAME = "butler-us-central1-dp2"
 DP2_GOOGLE_PROJECT = "data-curation-prod-fbdb"
@@ -99,8 +71,7 @@ def copy_dp2_files_to_google(export_directory: str) -> None:
 def _get_datastore_export_file_paths(export_directory: str) -> list[str]:
     import_info = DataReleaseImportInfo(export_directory)
     return [
-        str(info.datastore_export_file)
-        for info in import_info.get_dataset_inputs(subset=DATASET_TYPES_TO_COPY)
+        str(info.datastore_export_file) for info in import_info.get_dataset_inputs(subset=DP2_MINI_SUBSET)
     ]
 
 
