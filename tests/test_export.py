@@ -77,6 +77,10 @@ class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
         ref5 = butler.put(5, "dt4", {"instrument": "LSSTCam", "detector": 10})
         certification_timespan = Timespan.from_day_obs(20260225)
         butler.registry.certify("calib", [ref5], certification_timespan)
+        # Same data ID as ref5, but a different calibration timespan.
+        ref6 = butler.put(6, "dt4", {"instrument": "LSSTCam", "detector": 10}, run="runs/def")
+        second_certification_timespan = Timespan.from_day_obs(20250101)
+        butler.registry.certify("calib", [ref6], second_certification_timespan)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
@@ -217,13 +221,20 @@ class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
             dt3_associations = read_table(tmpdir_path.joinpath("dt3.association.parquet")).to_pylist()
             self.assertEqual(dt3_associations, [])
             dt4_associations = read_table(tmpdir_path.joinpath("dt4.association.parquet")).to_pylist()
-            self.assertEqual(len(dt4_associations), 1)
+            dt4_associations.sort(key=lambda x: x["run"])
+            self.assertEqual(len(dt4_associations), 2)
             self.assertEqual(dt4_associations[0]["dataset_id"], ref5.id.bytes)
             self.assertEqual(dt4_associations[0]["run"], "runs/abc")
             self.assertEqual(dt4_associations[0]["instrument"], "LSSTCam")
             self.assertEqual(dt4_associations[0]["detector"], 10)
             self.assertEqual(dt4_associations[0]["collection"], "calib")
             self.assertEqual(dt4_associations[0]["timespan"], certification_timespan)
+            self.assertEqual(dt4_associations[1]["dataset_id"], ref6.id.bytes)
+            self.assertEqual(dt4_associations[1]["run"], "runs/def")
+            self.assertEqual(dt4_associations[1]["instrument"], "LSSTCam")
+            self.assertEqual(dt4_associations[1]["detector"], 10)
+            self.assertEqual(dt4_associations[1]["collection"], "calib")
+            self.assertEqual(dt4_associations[1]["timespan"], second_certification_timespan)
 
             # Import to a new repo and make sure it round-trips.
             import_repo = self.enterContext(tempfile.TemporaryDirectory())
@@ -251,8 +262,14 @@ class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
                 # Check import of tag and calibration collections.
                 self.assertEqual(import_butler.query_datasets("dt1", "tag"), [ref2])
                 self.assertEqual(
-                    list(import_butler.registry.queryDatasetAssociations("dt4", "calib")),
-                    [DatasetAssociation(ref5, "calib", certification_timespan)],
+                    sorted(
+                        import_butler.registry.queryDatasetAssociations("dt4", "calib"),
+                        key=lambda x: x.timespan,
+                    ),
+                    [
+                        DatasetAssociation(ref6, "calib", second_certification_timespan),
+                        DatasetAssociation(ref5, "calib", certification_timespan),
+                    ],
                 )
 
                 # The export process implicitly converts URIs to absolute

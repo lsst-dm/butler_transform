@@ -115,7 +115,13 @@ class DatasetExporter:
         )
         async with create_task_group() as tg:
             for dt in resolved_dataset_types:
-                await tg.start(self._export_single_dataset_type, context, dt)
+                # For most pipeline outputs, we want to apply find-first so
+                # that we take only the "best" version from the front of the
+                # collection chain.  For calibration dataset types, there will
+                # be multiple versions associated with different certification
+                # timespans, and we need to fetch all of them.
+                find_first = not dt.isCalibration()
+                await tg.start(self._export_single_dataset_type, context, dt, find_first)
 
         output_collections = list(resolved_collections)
         extra_run_collections = context.run_collections_found - set([c.name for c in resolved_collections])
@@ -127,7 +133,12 @@ class DatasetExporter:
         return DatasetExportResult(manifests=context.manifests, collections_referenced=output_collections)
 
     async def _export_single_dataset_type(
-        self, context: _DatasetExportContext, dataset_type: DatasetType, *, task_status: TaskStatus
+        self,
+        context: _DatasetExportContext,
+        dataset_type: DatasetType,
+        find_first: bool,
+        *,
+        task_status: TaskStatus,
     ) -> None:
         async with self._limiter:
             task_status.started()
@@ -136,6 +147,7 @@ class DatasetExporter:
             run_collections_found = await self._butler_pool.run_with_butler(
                 _export_datasets_sync,
                 dataset_type,
+                find_first,
                 context.search_collections,
                 dataset_parquet_path,
             )
@@ -149,7 +161,7 @@ class DatasetExporter:
                 )
                 tg.start_soon(
                     self._export_associations,
-                    context,
+                    context.association_collections,
                     dataset_type,
                     dataset_parquet_path,
                     self._output_directory.joinpath(manifest.association_export_file),
@@ -158,7 +170,7 @@ class DatasetExporter:
 
     async def _export_associations(
         self,
-        context: _DatasetExportContext,
+        collections: Iterable[str],
         dataset_type: DatasetType,
         dataset_parquet_path: Path,
         output_path: Path,
@@ -166,7 +178,7 @@ class DatasetExporter:
         async with TemporaryDirectory() as tempdir:
             temp_path = Path(tempdir) / "association.parquet"
             await self._butler_pool.run_with_butler(
-                _export_associations_sync, dataset_type, context.association_collections, temp_path
+                _export_associations_sync, dataset_type, collections, temp_path
             )
             await self._duckdb_pool.run_with_duckdb(
                 _filter_associations_by_matching_datasets, temp_path, dataset_parquet_path, output_path
@@ -261,12 +273,13 @@ def _resolve_collections(butler: Butler, collections: Iterable[str]) -> Iterable
 def _export_datasets_sync(
     butler: Butler,
     dataset_type: DatasetType,
+    find_first: bool,
     collections: Iterable[str],
     output_parquet_path: Path,
 ) -> set[str]:
     run_collections_found: set[str] = set()
     with DatasetsParquetWriter(output_parquet_path, dataset_type) as writer, butler.query() as query:
-        results = query.datasets(dataset_type, collections, find_first=True)
+        results = query.datasets(dataset_type, collections, find_first=find_first)
         for batch in batched(results, 50_000):
             table = DatasetRefTable.from_refs(dataset_type, batch)
             run_collections_found.update(table.get_run_collections())
