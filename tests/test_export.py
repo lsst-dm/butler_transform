@@ -59,10 +59,12 @@ class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
         dt4 = DatasetType(
             "dt4", ["instrument", "detector"], "int", universe=butler.dimensions, isCalibration=True
         )
+        provenance_dt = DatasetType("run_provenance", [], "int", universe=butler.dimensions)
         butler.registry.registerDatasetType(dt1)
         butler.registry.registerDatasetType(dt2)
         butler.registry.registerDatasetType(dt3)
         butler.registry.registerDatasetType(dt4)
+        butler.registry.registerDatasetType(provenance_dt)
 
         ref1 = butler.put(1, "dt1", {"instrument": "LSSTCam", "visit": 2025120200439})
         # ref2 will be looked up only by the tagged collection, because its run collection "runs/def"
@@ -81,6 +83,9 @@ class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
         ref6 = butler.put(6, "dt4", {"instrument": "LSSTCam", "detector": 10}, run="runs/def")
         second_certification_timespan = Timespan.from_day_obs(20250101)
         butler.registry.certify("calib", [ref6], second_certification_timespan)
+        # Register provenance datasets for each run collection.
+        prov1 = butler.put(1, "run_provenance", dataId={}, run="runs/abc")
+        prov2 = butler.put(2, "run_provenance", dataId={}, run="runs/def")
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
@@ -92,6 +97,7 @@ class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
                     butler_pool,
                     tmpdir_path,
                     ["dt1", "d*2", "dt3", "dt4"],
+                    ["run_provenance"],
                     ["runs/abc", "tag", "calib"],
                 )
 
@@ -116,6 +122,20 @@ class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
 
             dt3_datasets = read_table(tmpdir_path.joinpath("dt3.datasets.parquet")).to_pylist()
             self.assertEqual(len(dt3_datasets), 0)
+
+            provenance_datasets = read_table(
+                tmpdir_path.joinpath("run_provenance.datasets.parquet")
+            ).to_pylist()
+            provenance_datasets.sort(key=lambda row: row["run"])
+            self.assertEqual(len(provenance_datasets), 2)
+            self.assertEqual(provenance_datasets[0]["dataset_id"], prov1.id.bytes)
+            self.assertEqual(provenance_datasets[0]["run"], "runs/abc")
+            # The "prov2" dataset was not in a run referenced by the input
+            # collections directly -- there are datasets in "runs/def"
+            # referenced via a tagged collection, so this should get
+            # pulled in implicitly.
+            self.assertEqual(provenance_datasets[1]["dataset_id"], prov2.id.bytes)
+            self.assertEqual(provenance_datasets[1]["run"], "runs/def")
 
             dt1_datastore = read_table(tmpdir_path.joinpath("dt1.datastore.parquet")).to_pylist()
             dt1_datastore.sort(key=lambda row: row["path"])
@@ -278,3 +298,5 @@ class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(import_butler.get(ref1), 1)
                 self.assertEqual(import_butler.get(ref2), 20)
                 self.assertEqual(import_butler.get(ref3), 3)
+                self.assertEqual(import_butler.get(prov1), 1)
+                self.assertEqual(import_butler.get(prov2), 2)
