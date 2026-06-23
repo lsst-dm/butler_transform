@@ -84,6 +84,7 @@ class DataReleaseImportInfo:
                 dataset_type=DatasetType.from_simple(ds.dataset_type, self.universe),
                 dataset_export_file=self._get_absolute_path(ds.dataset_export_file),
                 datastore_export_file=self._get_absolute_path(ds.datastore_export_file),
+                association_export_file=self._get_absolute_path(ds.association_export_file),
             )
             for ds in self.manifest.datasets
         ]
@@ -110,6 +111,7 @@ class DatasetImportInfo:
     dataset_type: DatasetType
     dataset_export_file: Path
     datastore_export_file: Path
+    association_export_file: Path
 
 
 async def import_data_release(
@@ -185,8 +187,15 @@ async def _import_datasets_when_ready(
     async with limiter:
         importer = DatasetImporter(butler_pool, info.dataset_type)
         await importer.import_datasets(info.dataset_export_file, progress_display.handle_dataset_import_event)
-        await importer.import_datastore(
-            info.datastore_export_file,
-            progress_display.handle_datastore_import_event,
-            datastore_transform_function,
-        )
+        async with create_task_group() as tg:
+            tg.start_soon(
+                importer.import_datastore,
+                info.datastore_export_file,
+                progress_display.handle_datastore_import_event,
+                datastore_transform_function,
+            )
+            tg.start_soon(
+                importer.import_associations,
+                info.association_export_file,
+                progress_display.handle_association_import_event,
+            )
