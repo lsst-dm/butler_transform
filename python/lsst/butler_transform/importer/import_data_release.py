@@ -27,6 +27,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -91,12 +92,15 @@ class DataReleaseImportInfo:
         if subset is None:
             return import_info
 
-        subset = set(subset)
-        import_info = [info for info in import_info if info.dataset_type.name in subset]
-        missing = subset - set(info.dataset_type.name for info in import_info)
-        if missing:
-            raise ValueError(f"Requested dataset types not found in export dump: {missing}")
-        return import_info
+        available_dataset_types = [info.dataset_type.name for info in import_info]
+        found_dataset_types = set[str]()
+        for glob in subset:
+            matches = fnmatch.filter(available_dataset_types, glob)
+            if not matches:
+                raise ValueError(f"Requested dataset type pattern '{glob}' is not present in export dump")
+            found_dataset_types.update(matches)
+
+        return [info for info in import_info if info.dataset_type.name in found_dataset_types]
 
     def _get_absolute_path(self, suffix: str) -> Path:
         path = self._directory.joinpath(suffix).resolve()
