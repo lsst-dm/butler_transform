@@ -36,7 +36,7 @@ from pyarrow.parquet import read_table
 from lsst.butler_transform.export.export_data_release import export_data_release
 from lsst.butler_transform.importer.import_data_release import DataReleaseImportInfo, import_data_release
 from lsst.butler_transform.utils.butler_process_pool import ButlerProcessPool
-from lsst.daf.butler import Butler, CollectionType, DatasetType, Timespan
+from lsst.daf.butler import Butler, CollectionType, DatasetAssociation, DatasetType, Timespan
 
 
 class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
@@ -241,12 +241,19 @@ class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
                     import_butler.collections.query_info("*", include_doc=True),
                 )
 
-                for dataset_type in ["dt1", "dt2", "dt3"]:
+                for dataset_type in ["dt1", "dt2", "dt3", "dt4"]:
                     self.assertEqual(
                         import_butler.get_dataset_type(dataset_type), butler.get_dataset_type(dataset_type)
                     )
                 for ref in [ref1, ref2, ref3]:
                     self.assertEqual(import_butler.get_dataset(ref.id), ref)
+
+                # Check import of tag and calibration collections.
+                self.assertEqual(import_butler.query_datasets("dt1", "tag"), [ref2])
+                self.assertEqual(
+                    list(import_butler.registry.queryDatasetAssociations("dt4", "calib")),
+                    [DatasetAssociation(ref5, "calib", certification_timespan)],
+                )
 
                 # The export process implicitly converts URIs to absolute
                 # paths, so these gets use files from their original location
