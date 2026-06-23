@@ -37,6 +37,7 @@ import pyarrow
 from lsst.daf.butler import DatasetAssociation, DatasetId, DatasetRef, DatasetType, DimensionGroup, Timespan
 from lsst.daf.butler.arrow_utils import TimespanArrowType
 
+from ..utils.arrow import sort_by_dictionary_column
 from .async_parquet_reader import AsyncParquetReader, TableReaderBase
 from .async_parquet_writer import AsyncParquetWriter
 
@@ -143,6 +144,23 @@ class DatasetAssociationTable:
 
         return DatasetAssociationTable(dataset_type, table)
 
+    def to_associations(self) -> Sequence[DatasetAssociation]:
+        ref_table = DatasetRefTable(self.dataset_type, self.table)
+        refs = ref_table.to_refs()
+        collections = self.table.column("collection").to_pylist()
+        timespans = self.table.column("timespan").to_pylist()
+
+        return [
+            DatasetAssociation(ref, collection, timespan)
+            for ref, collection, timespan in zip(refs, collections, timespans)
+        ]
+
+    def sort_by_collection(self) -> DatasetAssociationTable:
+        return DatasetAssociationTable(self.dataset_type, sort_by_dictionary_column(self.table, "collection"))
+
+    def __len__(self) -> int:
+        return len(self.table)
+
 
 class DatasetsParquetReader(TableReaderBase[DatasetRefTable]):
     """Reads `lsst.daf.butler.DatasetRef` rows from a parquet file."""
@@ -154,6 +172,16 @@ class DatasetsParquetReader(TableReaderBase[DatasetRefTable]):
     @override
     def _convert_table(self, table: pyarrow.Table) -> DatasetRefTable:
         return DatasetRefTable(self._dataset_type, table)
+
+
+class DatasetAssociationParquetReader(TableReaderBase[DatasetAssociationTable]):
+    def __init__(self, input_file: Path | str, dataset_type: DatasetType) -> None:
+        super().__init__(input_file)
+        self._dataset_type = dataset_type
+
+    @override
+    def _convert_table(self, table: pyarrow.Table) -> DatasetAssociationTable:
+        return DatasetAssociationTable(self._dataset_type, table)
 
 
 @cache

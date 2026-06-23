@@ -73,3 +73,7 @@ module = [
     "google.cloud.storage"
 ]
 ignore_missing_imports = true
+# Pyarrow currently has a py.typed marker, but does not have complete typings.
+# This causes mypy to report an attr-defined error for all pyarrow compute
+# functions.
+follow_imports = "skip"

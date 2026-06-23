@@ -31,17 +31,23 @@ from collections import defaultdict
 from collections.abc import Sized
 from dataclasses import dataclass
 from functools import partial
+from itertools import groupby
 from pathlib import Path
 from typing import Callable, Literal
 
 from anyio import create_task_group
 from anyio.abc import TaskStatus
 
-from lsst.daf.butler import Butler, DatasetRef, DatasetType
+from lsst.daf.butler import Butler, CollectionType, DatasetAssociation, DatasetRef, DatasetType, Timespan
 from lsst.daf.butler._rubin.datastore_records import DatastoreRecordTable, import_datastore_records_table
 
 from ..parquet.async_parquet_reader import TableReaderBase
-from ..parquet.datasets import DatasetRefTable, DatasetsParquetReader
+from ..parquet.datasets import (
+    DatasetAssociationParquetReader,
+    DatasetAssociationTable,
+    DatasetRefTable,
+    DatasetsParquetReader,
+)
 from ..parquet.datastore import DatastoreParquetReader
 from ..utils.butler_pool import ButlerPool
 
@@ -106,6 +112,14 @@ class DatasetImporter:
         async with DatastoreParquetReader(input_file) as reader:
             await self._do_import(reader, event_callback, import_func)
 
+    async def import_associations(
+        self,
+        input_file: Path,
+        event_callback: DatasetImportEventCallback,
+    ) -> None:
+        async with DatasetAssociationParquetReader(input_file, self._dataset_type) as reader:
+            await self._do_import(reader, event_callback, _import_associations)
+
     async def _do_import[T: Sized](
         self,
         reader: TableReaderBase[T],
@@ -162,3 +176,23 @@ def _import_datastore(
     if transform_function is not None:
         table = transform_function(table)
     import_datastore_records_table(butler, table)
+
+
+def _import_associations(butler: Butler, table: DatasetAssociationTable) -> None:
+    associations = table.sort_by_collection().to_associations()
+    for collection, rows in groupby(associations, _get_collection):
+        collection_type = butler.collections.get_info(collection).type
+        if collection_type == CollectionType.TAGGED:
+            butler.registry.associate(collection, [r.ref for r in rows])
+        elif collection_type == CollectionType.CALIBRATION:
+            for row in rows:
+                timespan = row.timespan
+                if timespan is None:
+                    timespan = Timespan(None, None)
+                butler.registry.certify(collection, [row.ref], timespan)
+        else:
+            raise ValueError(f"Unexpected collection type '{collection_type}' when importing associations")
+
+
+def _get_collection(association: DatasetAssociation) -> str:
+    return association.collection
