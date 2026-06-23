@@ -55,32 +55,13 @@ class DatasetsParquetWriter(AsyncParquetWriter):
 class DatasetAssociationParquetWriter(AsyncParquetWriter):
     """Writes Butler `lsst.daf.butler.DatasetAssociation` instances to a parquet file."""
 
-    COLLECTION_FIELD_TYPE = pyarrow.dictionary(pyarrow.int32(), pyarrow.string())
-    TIMESPAN_FIELD_TYPE = TimespanArrowType()
-    COLLECTION_FIELD = pyarrow.field(
-        "collection",
-        COLLECTION_FIELD_TYPE,
-        nullable=False,
-    )
-    TIMESPAN_FIELD = pyarrow.field("timespan", TIMESPAN_FIELD_TYPE, nullable=True)
-
     def __init__(self, output_file: str | Path, dataset_type: DatasetType) -> None:
         super().__init__(output_file, _create_association_arrow_schema(dataset_type.dimensions))
         self._dataset_type = dataset_type
 
     def add_associations_sync(self, associations: Sequence[DatasetAssociation]) -> None:
-        ref_table = DatasetRefTable.from_refs(self._dataset_type, [assoc.ref for assoc in associations])
-        collection_column = pyarrow.array(
-            [assoc.collection for assoc in associations], type=self.COLLECTION_FIELD_TYPE
-        )
-        timespan_column = pyarrow.array(
-            [_convert_timespan_to_dict(assoc.timespan) for assoc in associations],
-            type=self.TIMESPAN_FIELD_TYPE,
-        )
-        table = ref_table.table.append_column(self.COLLECTION_FIELD, collection_column).append_column(
-            self.TIMESPAN_FIELD, timespan_column
-        )
-        self.write_table_sync(table)
+        table = DatasetAssociationTable.from_associations(self._dataset_type, associations)
+        self.write_table_sync(table.table)
 
 
 async def read_dataset_ids(input_file: str | Path) -> AsyncIterator[list[DatasetId]]:
@@ -123,6 +104,39 @@ class DatasetRefTable:
         return len(self.table)
 
 
+class DatasetAssociationTable:
+    COLLECTION_FIELD_TYPE = pyarrow.dictionary(pyarrow.int32(), pyarrow.string())
+    TIMESPAN_FIELD_TYPE = TimespanArrowType()
+    COLLECTION_FIELD = pyarrow.field(
+        "collection",
+        COLLECTION_FIELD_TYPE,
+        nullable=False,
+    )
+    TIMESPAN_FIELD = pyarrow.field("timespan", TIMESPAN_FIELD_TYPE, nullable=True)
+
+    def __init__(self, dataset_type: DatasetType, table: pyarrow.Table) -> None:
+        self.dataset_type = dataset_type
+        self.table = table
+
+    @classmethod
+    def from_associations(
+        cls, dataset_type: DatasetType, associations: Sequence[DatasetAssociation]
+    ) -> DatasetAssociationTable:
+        ref_table = DatasetRefTable.from_refs(dataset_type, [assoc.ref for assoc in associations])
+        collection_column = pyarrow.array(
+            [assoc.collection for assoc in associations], type=cls.COLLECTION_FIELD_TYPE
+        )
+        timespan_column = pyarrow.array(
+            [_convert_timespan_to_dict(assoc.timespan) for assoc in associations],
+            type=cls.TIMESPAN_FIELD_TYPE,
+        )
+        table = ref_table.table.append_column(cls.COLLECTION_FIELD, collection_column).append_column(
+            cls.TIMESPAN_FIELD, timespan_column
+        )
+
+        return DatasetAssociationTable(dataset_type, table)
+
+
 class DatasetsParquetReader(TableReaderBase[DatasetRefTable]):
     """Reads `lsst.daf.butler.DatasetRef` rows from a parquet file."""
 
@@ -149,8 +163,8 @@ def _create_dataset_arrow_schema(dimensions: DimensionGroup) -> pyarrow.Schema:
 def _create_association_arrow_schema(dimensions: DimensionGroup) -> pyarrow.Schema:
     return (
         _create_dataset_arrow_schema(dimensions)
-        .append(DatasetAssociationParquetWriter.COLLECTION_FIELD)
-        .append(DatasetAssociationParquetWriter.TIMESPAN_FIELD)
+        .append(DatasetAssociationTable.COLLECTION_FIELD)
+        .append(DatasetAssociationTable.TIMESPAN_FIELD)
     )
 
 
