@@ -28,7 +28,7 @@
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from itertools import batched
 from pathlib import Path
 
@@ -65,7 +65,12 @@ class DatasetExporter:
         self._limiter = CapacityLimiter(butler_pool.max_connections)
         self._datastore_exporter = DatastoreExporter(self._butler_pool)
 
-    async def export(self, dataset_types: Iterable[str], collections: Iterable[str]) -> DatasetExportResult:
+    async def export(
+        self,
+        dataset_types: Iterable[str],
+        provenance_dataset_types: Iterable[str],
+        collections: Iterable[str],
+    ) -> DatasetExportResult:
         resolved_dataset_types = await self._butler_pool.run_with_butler(
             _resolve_dataset_types, list(dataset_types)
         )
@@ -74,17 +79,8 @@ class DatasetExporter:
         resolved_collections = await self._butler_pool.run_with_butler(
             _resolve_collections, list(collections)
         )
-        # Drop chained collections to get only the concrete collections we will search for.
-        search_collections = [c.name for c in resolved_collections if c.type != CollectionType.CHAINED]
-        association_collections = [
-            c.name
-            for c in resolved_collections
-            if (c.type == CollectionType.CALIBRATION or c.type == CollectionType.TAGGED)
-        ]
 
-        context = _DatasetExportContext(
-            search_collections=search_collections, association_collections=association_collections
-        )
+        context = _DatasetExportContext()
         async with create_task_group() as tg:
             for dt in resolved_dataset_types:
                 # For most pipeline outputs, we want to apply find-first so
@@ -93,7 +89,9 @@ class DatasetExporter:
                 # be multiple versions associated with different certification
                 # timespans, and we need to fetch all of them.
                 find_first = not dt.isCalibration()
-                await tg.start(self._export_single_dataset_type, context, dt, find_first)
+                await tg.start(
+                    self._export_single_dataset_type, context, dt, resolved_collections, find_first
+                )
 
         output_collections = list(resolved_collections)
         extra_run_collections = context.run_collections_found - set([c.name for c in resolved_collections])
@@ -102,25 +100,55 @@ class DatasetExporter:
                 await self._butler_pool.run_with_butler(_resolve_collections, extra_run_collections)
             )
 
+        # We need to fetch the provenance datasets from all run collections
+        # used by any datasets found during the search.  This requires us to
+        # wait until the rest of the dataset searches have finished, and then
+        # use the complete list of collections including the "extra" run
+        # collections found during the search.
+        resolved_provenance_dataset_types = await self._butler_pool.run_with_butler(
+            _resolve_dataset_types, list(provenance_dataset_types)
+        )
+        async with create_task_group() as tg:
+            for dt in resolved_provenance_dataset_types:
+                await tg.start(
+                    self._export_single_dataset_type,
+                    context,
+                    dt,
+                    output_collections,
+                    # Don't use find-first -- provenance dataset types generally have empty data IDs,
+                    # and we need all of them.
+                    False,
+                )
+
         return DatasetExportResult(manifests=context.manifests, collections_referenced=output_collections)
 
     async def _export_single_dataset_type(
         self,
         context: _DatasetExportContext,
         dataset_type: DatasetType,
+        collections: Sequence[CollectionInfo],
         find_first: bool,
         *,
         task_status: TaskStatus,
     ) -> None:
         async with self._limiter:
             task_status.started()
+
+            # Drop chained collections to get only the concrete collections we will search for.
+            search_collections = [c.name for c in collections if c.type != CollectionType.CHAINED]
+            association_collections = [
+                c.name
+                for c in collections
+                if (c.type == CollectionType.CALIBRATION or c.type == CollectionType.TAGGED)
+            ]
+
             manifest = context.add_manifest(dataset_type)
             dataset_parquet_path = self._output_directory.joinpath(manifest.dataset_export_file)
             run_collections_found = await self._butler_pool.run_with_butler(
                 _export_datasets_sync,
                 dataset_type,
                 find_first,
-                context.search_collections,
+                search_collections,
                 dataset_parquet_path,
             )
             context.add_found_run_collections(run_collections_found)
@@ -133,7 +161,7 @@ class DatasetExporter:
                 )
                 tg.start_soon(
                     self._export_associations,
-                    context.association_collections,
+                    association_collections,
                     dataset_type,
                     dataset_parquet_path,
                     self._output_directory.joinpath(manifest.association_export_file),
@@ -190,9 +218,7 @@ class DatasetExportManifest(BaseModel):
 
 
 class _DatasetExportContext:
-    def __init__(self, search_collections: Iterable[str], association_collections: Iterable[str]) -> None:
-        self.search_collections = tuple(search_collections)
-        self.association_collections = tuple(association_collections)
+    def __init__(self) -> None:
         self.run_collections_found = set[str]()
         self.manifests = list[DatasetExportManifest]()
 

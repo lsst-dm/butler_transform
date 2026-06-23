@@ -45,6 +45,7 @@ async def export_data_release(
     butler_pool: ButlerPool,
     output_directory: Path,
     dataset_types: Iterable[str],
+    provenance_dataset_types: Iterable[str],
     collections: Iterable[str],
 ) -> None:
     """Bulk export datasets and associated data in a format that can be used to
@@ -56,6 +57,9 @@ async def export_data_release(
         Destination directory for parquet files containing export data.
     dataset_types
         List of dataset type names that will be exported.
+    dataset_types
+        List of provenance dataset type names (e.g. "run_provenance") that will
+        be exported.
     collections
         List of collections that datasets will be exported from.
     """
@@ -75,7 +79,9 @@ async def export_data_release(
                     )
 
             dataset_exporter = DatasetExporter(butler_pool, duckdb_pool, output_directory)
-            dataset_export_task = tg.create_task(dataset_exporter.export(dataset_types, collections))
+            dataset_export_task = tg.create_task(
+                dataset_exporter.export(dataset_types, provenance_dataset_types, collections)
+            )
 
     dataset_export_result = dataset_export_task.result()
 
