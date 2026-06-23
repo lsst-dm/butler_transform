@@ -80,9 +80,9 @@ DATASET_TYPES = (
     "skyMap",
     "standard_passband",
     "pretrainedModelPackage",
-    # Provenance
-    "run_provenance",
 )
+
+PROVENANCE_DATASET_TYPES = ("run_provenance",)
 
 COLLECTIONS = ("LSSTCam/runs/DRP/DP2",)
 
@@ -113,6 +113,7 @@ async def _export_dp2_async(repo: str) -> None:
             butler_pool,
             output_directory=Path.cwd().joinpath("dp2-export"),
             dataset_types=DATASET_TYPES,
+            provenance_dataset_types=PROVENANCE_DATASET_TYPES,
             collections=COLLECTIONS,
         )
 

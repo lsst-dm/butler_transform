@@ -88,6 +88,7 @@ class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
                     butler_pool,
                     tmpdir_path,
                     ["dt1", "d*2", "dt3", "dt4"],
+                    [],
                     ["runs/abc", "tag", "calib"],
                 )
 
