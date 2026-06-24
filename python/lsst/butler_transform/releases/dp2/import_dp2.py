@@ -30,11 +30,12 @@ from tempfile import TemporaryDirectory
 
 import click
 
-from lsst.daf.butler import Butler, Config
+from lsst.daf.butler import Butler, CollectionType, Config
 
 from ...importer.import_data_release import DataReleaseImportInfo, import_data_release
 from ._datastore_map import generate_dp2_datastore_config, map_files_to_dp2_datastores
 from ._mini_subset import DP2_MINI_SUBSET
+from .export import TOP_LEVEL_COLLECTION
 
 
 @click.command
@@ -63,6 +64,15 @@ def import_dp2(export_directory: str, schema: str, database_uri: str, mini: bool
                 datastore_transform_function=map_files_to_dp2_datastores,
             )
         )
+        with Butler.from_config(butler_repo, writeable=True) as butler:
+            _create_top_level_chain(butler)
+
+
+def _create_top_level_chain(butler: Butler) -> None:
+    children = butler.collections.get_info(TOP_LEVEL_COLLECTION).children
+    name = "dp2"
+    butler.collections.register(name, CollectionType.CHAINED)
+    butler.collections.redefine_chain(name, children)
 
 
 if __name__ == "__main__":
