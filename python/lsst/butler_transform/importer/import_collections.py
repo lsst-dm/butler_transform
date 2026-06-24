@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from lsst.daf.butler import Butler, CollectionInfo
+from lsst.daf.butler import Butler, CollectionInfo, CollectionType
 
 from ..parquet.collections import read_collections_from_parquet
 from ..utils.butler_pool import ButlerPool
@@ -40,15 +40,24 @@ async def import_collections(butler_pool: ButlerPool, input_file: Path) -> None:
 
     Notes
     -----
-    All collection types are registered, but the children of chained
-    collections and dataset associations of tagged/calibration collections are
-    not set up.
+    This creates all collections and defines chained collection, but does not
+    register the children of tagged or calibration collections.
     """
     async for batch in read_collections_from_parquet(input_file):
         await butler_pool.run_with_butler(_import_collections, batch)
+
+    async for batch in read_collections_from_parquet(input_file):
+        await butler_pool.run_with_butler(_setup_chains, batch)
 
 
 def _import_collections(butler: Butler, collections: list[CollectionInfo]) -> None:
     with butler.transaction():
         for c in collections:
             butler.collections.register(c.name, c.type, c.doc)
+
+
+def _setup_chains(butler: Butler, collections: list[CollectionInfo]) -> None:
+    with butler.transaction():
+        for c in collections:
+            if c.type == CollectionType.CHAINED:
+                butler.collections.redefine_chain(c.name, c.children)
