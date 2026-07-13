@@ -44,8 +44,12 @@ class DatastoreParquetWriter(AsyncParquetWriter):
         super().__init__(output_path, DatastoreRecordTable.make_arrow_schema())
 
     async def write_records(self, table: DatastoreRecordTable) -> None:
-        """Append records from Butler Datastore."""
+        """Append records from Butler Datastore asynchronously."""
         await self.write_table(table.to_arrow())
+
+    def write_records_sync(self, table: DatastoreRecordTable) -> None:
+        """Append records from Butler Datastore."""
+        self.write_table_sync(table.to_arrow())
 
 
 class DatastoreParquetReader(TableReaderBase[DatastoreRecordTable]):
