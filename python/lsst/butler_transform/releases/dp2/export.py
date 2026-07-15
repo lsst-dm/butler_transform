@@ -41,6 +41,8 @@ DATASET_TYPES = (
     # 1.3 Non-image, non-qserv table Butler datasets
     "object_scarlet_models",
     "visit_summary",
+    "deep_coadd_input_summary",
+    "compare_warp_artifact_mask",
     # Property maps
     "deepCoadd_*_consolidated_map_*",
     # 1.4 Image datasets
