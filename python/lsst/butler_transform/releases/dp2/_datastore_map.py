@@ -46,6 +46,10 @@ buckets used to serve them.
 
 
 def generate_dp2_datastore_config() -> dict:
+    """Generate a Butler datastore configuration to use for DP2 on the Google
+    RSP.  The generated configuration is a ChainedDatastore with one child
+    datastore for each storage root that will be mapped to an S3 bucket.
+    """
     datastores = set(DP2_DATASTORE_MAP.values())
     return {
         "cls": "lsst.daf.butler.datastores.chainedDatastore.ChainedDatastore",

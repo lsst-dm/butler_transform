@@ -77,9 +77,13 @@ class DataReleaseImportInfo:
         }
 
     def get_collection_input(self) -> Path:
+        """Return the absolute path to the parquet file containing collection
+        information.
+        """
         return self._get_absolute_path(self.manifest.collection_export_file)
 
     def get_dataset_inputs(self, subset: Iterable[str] | None = None) -> list[DatasetImportInfo]:
+        """Return information about each dataset type included in the export."""
         import_info = [
             DatasetImportInfo(
                 dataset_type=DatasetType.from_simple(ds.dataset_type, self.universe),

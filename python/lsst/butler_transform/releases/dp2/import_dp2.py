@@ -43,18 +43,34 @@ from ._mini_subset import DP2_MINI_SUBSET
 @click.argument("database_uri")
 @click.option("--mini", is_flag=True)
 def import_dp2(export_directory: str, schema: str, database_uri: str, mini: bool) -> None:
+    """Set up the Butler database for DP2, starting from an empty database.
+
+    Parameters
+    ----------
+    export_directory
+        Path to a directory containing an exported parquet copy of the DP2
+        Butler database.
+    schema
+        Database schema name that the imported database will be written into.
+    database_uri
+        Postgres URI for the database server that will be written into.
+    """
     import_info = DataReleaseImportInfo(export_directory)
     with TemporaryDirectory() as butler_repo:
+        # Construct a Butler configuration that has a chained datastore with a
+        # root for each DP2 storage location, and the database configuration
+        # given on the command line.
         config = Config()
         config["registry", "db"] = database_uri
         config["registry", "namespace"] = schema
         config["datastore"] = generate_dp2_datastore_config()
 
+        # Create a temporary Butler repo to connect us to the database during
+        # the import process.
         repo_config = Butler.makeRepo(butler_repo, config, dimensionConfig=import_info.get_dimension_config())
         repo_config.dumpToUri("dp2-butler-config.yaml")
 
         dataset_types = DP2_MINI_SUBSET if mini else None
-
         asyncio.run(
             import_data_release(
                 butler_repo,
