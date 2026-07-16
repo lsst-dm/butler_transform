@@ -44,7 +44,6 @@ DP2_MINI_SUBSET = (
     "visit_table",
     "visit_detector_table",
     # Other tables
-    "object_parent",
     "deepCoadd_*_consolidated_map_*",
     "object_scarlet_models",
     "visit_summary",

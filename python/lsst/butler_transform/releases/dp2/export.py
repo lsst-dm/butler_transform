@@ -53,7 +53,6 @@ DATASET_TYPES = (
     "difference_image",
     # 1.5 QSERV Table Products
     "object",
-    "object_parent",
     "isolated_star_stellar_motions",
     "object_shear_all",
     "source",
