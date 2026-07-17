@@ -28,12 +28,19 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 import click
+from duckdb import ColumnExpression, ConstantExpression, DuckDBPyConnection, DuckDBPyRelation
+from pyarrow.parquet import read_schema
 
 from ...export.export_data_release import export_data_release
+from ...importer.import_data_release import DataReleaseImportInfo
 from ...utils.butler_process_pool import ButlerProcessPool
+from ...utils.duckdb import initialize_duckdb_connection, write_duckdb_results_to_parquet
 
 # From
 # https://rubinobs.atlassian.net/wiki/spaces/DM/pages/1210908682/All+DP2+data+products
@@ -104,18 +111,67 @@ _MAX_BUTLER_CONNECTIONS = 32
     default="dp2_prep_future",
 )
 def export_dp2(repo: str) -> None:
-    asyncio.run(_export_dp2_async(repo))
+    output_path = Path.cwd().joinpath("dp2-export")
+    asyncio.run(_export_dp2_async(repo, output_path))
+    _modify_exported_files(output_path)
+    print(f"Exported data written to {output_path}")
 
 
-async def _export_dp2_async(repo: str) -> None:
+async def _export_dp2_async(repo: str, output_path: Path) -> Path:
     async with ButlerProcessPool.from_config(repo, _MAX_BUTLER_CONNECTIONS) as butler_pool:
         await export_data_release(
             butler_pool,
-            output_directory=Path.cwd().joinpath("dp2-export"),
+            output_directory=output_path,
             dataset_types=DATASET_TYPES,
             provenance_dataset_types=PROVENANCE_DATASET_TYPES,
             collections=[TOP_LEVEL_COLLECTION],
         )
+        return output_path
+
+
+def _modify_exported_files(export_directory: Path) -> None:
+    import_info = DataReleaseImportInfo(export_directory)
+    with initialize_duckdb_connection() as db:
+        _remove_unwanted_skymap(db, import_info)
+
+
+def _remove_unwanted_skymap(db: DuckDBPyConnection, import_info: DataReleaseImportInfo) -> None:
+    """Remove the legacy v1 skymap, which is present in the dimension records
+    and collection but not part of the data release.
+    """
+    unwanted_skymap = ConstantExpression("lsst_cells_v1")
+    # Remove the skymap from dimension records
+    _modify_parquet_file(
+        db,
+        import_info.get_dimension_record_input("skymap"),
+        lambda rel: rel.filter(ColumnExpression("name") != unwanted_skymap),
+    )
+    for f in [
+        import_info.get_dimension_record_input("tract"),
+        import_info.get_dimension_record_input("patch"),
+    ]:
+        _modify_parquet_file(db, f, lambda rel: rel.filter(ColumnExpression("skymap") != unwanted_skymap))
+
+    # Remove the skymap from datasets.
+    files = import_info.get_dataset_input("skyMap")
+    wanted_skymap_datasets = (
+        db.from_parquet(str(files.dataset_export_file))
+        .filter(ColumnExpression("skymap") != unwanted_skymap)
+        .select("dataset_id")
+    )
+    for f in [files.dataset_export_file, files.association_export_file, files.datastore_export_file]:
+        _modify_parquet_file(db, f, lambda rel: rel.join(wanted_skymap_datasets, "dataset_id", "semi"))
+
+
+def _modify_parquet_file(
+    db: DuckDBPyConnection, path: Path, function: Callable[[DuckDBPyRelation], DuckDBPyRelation]
+) -> None:
+    schema = read_schema(path)
+    with tempfile.TemporaryDirectory(dir=path.parent) as tempdir:
+        output_temp_file = Path(tempdir) / "temp.parquet"
+        output_relation = function(db.from_parquet(str(path)))
+        write_duckdb_results_to_parquet(output_relation, str(output_temp_file), schema=schema)
+        os.replace(output_temp_file, path)
 
 
 if __name__ == "__main__":
