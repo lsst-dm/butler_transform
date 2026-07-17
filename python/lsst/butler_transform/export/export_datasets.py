@@ -54,6 +54,18 @@ from .export_datastore import DatastoreExporter
 
 
 class DatasetExporter:
+    """Exports Butler datasets and related information to parquet files.
+
+    Parameters
+    ----------
+    butler_pool
+        Pool of Butler instances to use for querying datasets.
+    duckdb_pool
+        Pool of DuckDB connections to use for working with parquet files.
+    output_directory
+        Directory where exported dataset files will be written.
+    """
+
     def __init__(
         self, butler_pool: ButlerPool, duckdb_pool: DuckDbPool, output_directory: Path | str
     ) -> None:
@@ -66,6 +78,22 @@ class DatasetExporter:
         self._datastore_exporter = DatastoreExporter(self._butler_pool)
 
     async def export(self, dataset_types: Iterable[str], collections: Iterable[str]) -> DatasetExportResult:
+        """Export Butler dataset metadata.
+
+        Parameters
+        ----------
+        dataset_types
+            Names of Butler dataset types to be exported.
+        collections
+            Names of Butler collections that will be searched for datasets to
+            export.
+
+        Returns
+        -------
+        result
+            An object containing information about datasets and collections
+            found during the search.
+        """
         resolved_dataset_types = await self._butler_pool.run_with_butler(
             _resolve_dataset_types, list(dataset_types)
         )

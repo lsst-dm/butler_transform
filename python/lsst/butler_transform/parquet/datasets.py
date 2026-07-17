@@ -105,6 +105,10 @@ class DatasetRefTable:
 
 
 class DatasetAssociationTable:
+    """`pyarrow.Table` representation of `lsst.daf.butler.DatasetAssociation`
+    data.
+    """
+
     COLLECTION_FIELD_TYPE = pyarrow.dictionary(pyarrow.int32(), pyarrow.string())
     TIMESPAN_FIELD_TYPE = TimespanArrowType()
     COLLECTION_FIELD = pyarrow.field(
@@ -122,6 +126,9 @@ class DatasetAssociationTable:
     def from_associations(
         cls, dataset_type: DatasetType, associations: Sequence[DatasetAssociation]
     ) -> DatasetAssociationTable:
+        """Convert `lsst.daf.butler.DatasetAssociations` objects to an Arrow
+        table.
+        """
         ref_table = DatasetRefTable.from_refs(dataset_type, [assoc.ref for assoc in associations])
         collection_column = pyarrow.array(
             [assoc.collection for assoc in associations], type=cls.COLLECTION_FIELD_TYPE
