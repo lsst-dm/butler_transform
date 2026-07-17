@@ -46,6 +46,16 @@ from ..parquet.async_parquet_writer import DEFAULT_COMPRESSION
 def initialize_duckdb_connection(memory_limit: str = "4GB") -> Iterator[DuckDBPyConnection]:
     """Set up an in-memory DuckDB database, applying a memory limit and using
     the system tempdir for its working directory.
+
+    Parameters
+    ----------
+    memory_limit, optional
+        Maximum amount of RAM that DuckDB will use when executing queries.
+
+    Yields
+    ------
+    connection
+        DuckDB connection object.
     """
     with (
         tempfile.TemporaryDirectory(suffix=".duckdb") as tmpdir,
@@ -73,7 +83,7 @@ class DuckDbPool:
 
     Notes
     -----
-    Users should usually call ``DuckDbPool.initialize()`` instead of calling
+    Users should usually call ``DuckDbPool.initialize()`` instead of
     constructing this class directly.
     """
 
