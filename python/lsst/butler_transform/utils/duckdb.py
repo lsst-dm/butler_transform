@@ -71,6 +71,9 @@ def initialize_duckdb_connection(memory_limit: str = "4GB") -> Iterator[DuckDBPy
                 # For paranoia -- some of the scratch volumes at USDF are
                 # petabyte-sized.
                 "max_temp_directory_size": "128GB",
+                # Round-trip arrow types more reliably (e.g. keeping UUIDs as
+                # 16-byte binary arrays instead of converting to strings.)
+                "arrow_lossless_conversion": True,
             }
         ) as conn,
     ):
@@ -122,7 +125,7 @@ class DuckDbPool:
 def write_duckdb_results_to_parquet(
     relation: DuckDBPyRelation,
     output_file: str | Path,
-    schema: pyarrow.Schema | None = None,
+    schema: pyarrow.Schema,
     row_group_size=100_000,
 ):
     """Write DuckDB results to a Parquet file with the given schema and row
