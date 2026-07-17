@@ -36,7 +36,7 @@ from pyarrow.parquet import read_table
 from lsst.butler_transform.export.export_data_release import export_data_release
 from lsst.butler_transform.importer.import_data_release import DataReleaseImportInfo, import_data_release
 from lsst.butler_transform.utils.butler_process_pool import ButlerProcessPool
-from lsst.daf.butler import Butler, CollectionType, DatasetType
+from lsst.daf.butler import Butler, CollectionType, DatasetType, Timespan
 
 
 class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
@@ -48,21 +48,35 @@ class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
 
     async def test_dataset_release_export(self) -> None:
         butler: Butler = self.enterContext(Butler.from_config(self.repo, writeable=True, run="runs/abc"))
-        # Set up a second run collection and a tagged collection to use for
-        # testing collection export.
+        # Set up a second run collection, a tagged collection, and a chained
+        # collection to use for testing collection export.
         butler.collections.register("runs/def")
         butler.collections.register("tag", CollectionType.TAGGED, doc="this is a collection")
+        butler.collections.register("calib", CollectionType.CALIBRATION)
         dt1 = DatasetType("dt1", ["instrument", "visit"], "int", universe=butler.dimensions)
         dt2 = DatasetType("dt2", ["instrument", "detector"], "int", universe=butler.dimensions)
         dt3 = DatasetType("dt3", ["instrument", "detector"], "int", universe=butler.dimensions)
+        dt4 = DatasetType(
+            "dt4", ["instrument", "detector"], "int", universe=butler.dimensions, isCalibration=True
+        )
         butler.registry.registerDatasetType(dt1)
         butler.registry.registerDatasetType(dt2)
         butler.registry.registerDatasetType(dt3)
+        butler.registry.registerDatasetType(dt4)
 
         ref1 = butler.put(1, "dt1", {"instrument": "LSSTCam", "visit": 2025120200439})
+        # ref2 will be looked up only by the tagged collection, because its run collection "runs/def"
+        # is not in the collection chain.
         ref2 = butler.put(20, "dt1", {"instrument": "LSSTCam", "visit": 2025120200440}, run="runs/def")
         butler.registry.associate("tag", [ref2])
         ref3 = butler.put(3, "dt2", {"instrument": "LSSTCam", "detector": 10})
+        # ref4 is in the tagged collection "tag", but it will not be exported
+        # because it is shadowed by ref1, which appears earlier in the collection chain.
+        ref4 = butler.put(4, "dt1", {"instrument": "LSSTCam", "visit": 2025120200439}, run="runs/def")
+        butler.registry.associate("tag", [ref4])
+        ref5 = butler.put(5, "dt4", {"instrument": "LSSTCam", "detector": 10})
+        certification_timespan = Timespan.from_day_obs(20260225)
+        butler.registry.certify("calib", [ref5], certification_timespan)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
@@ -73,8 +87,8 @@ class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
                 await export_data_release(
                     butler_pool,
                     tmpdir_path,
-                    ["dt1", "d*2", "dt3"],
-                    ["runs/abc", "tag"],
+                    ["dt1", "d*2", "dt3", "dt4"],
+                    ["runs/abc", "tag", "calib"],
                 )
 
             dt1_datasets = read_table(tmpdir_path.joinpath("dt1.datasets.parquet")).to_pylist()
@@ -168,22 +182,48 @@ class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
             # Check export of collections.
             collection_table = read_table(tmpdir_path.joinpath("collections.parquet")).to_pylist()
             collection_table.sort(key=lambda c: c["name"])
-            self.assertEqual(len(collection_table), 3)
-            self.assertEqual(collection_table[0]["name"], "runs/abc")
-            self.assertEqual(collection_table[0]["type"], 1)
+            self.assertEqual(len(collection_table), 4)
+            self.assertEqual(collection_table[0]["name"], "calib")
+            self.assertEqual(collection_table[0]["type"], 4)
             self.assertEqual(collection_table[0]["doc"], "")
             self.assertEqual(collection_table[0]["children"], [])
-            # runs/def was not given in the list of input collections, but it
-            # should have been pulled in because one of the datasets in the
-            # input tagged collection references it.
-            self.assertEqual(collection_table[1]["name"], "runs/def")
+            self.assertEqual(collection_table[1]["name"], "runs/abc")
             self.assertEqual(collection_table[1]["type"], 1)
             self.assertEqual(collection_table[1]["doc"], "")
             self.assertEqual(collection_table[1]["children"], [])
-            self.assertEqual(collection_table[2]["name"], "tag")
-            self.assertEqual(collection_table[2]["type"], 2)
-            self.assertEqual(collection_table[2]["doc"], "this is a collection")
+            # runs/def was not given in the list of input collections, but it
+            # should have been pulled in because one of the datasets in the
+            # input tagged collection references it.
+            self.assertEqual(collection_table[2]["name"], "runs/def")
+            self.assertEqual(collection_table[2]["type"], 1)
+            self.assertEqual(collection_table[2]["doc"], "")
             self.assertEqual(collection_table[2]["children"], [])
+            self.assertEqual(collection_table[3]["name"], "tag")
+            self.assertEqual(collection_table[3]["type"], 2)
+            self.assertEqual(collection_table[3]["doc"], "this is a collection")
+            self.assertEqual(collection_table[3]["children"], [])
+
+            # Check export of dataset associations
+            dt1_associations = read_table(tmpdir_path.joinpath("dt1.association.parquet")).to_pylist()
+            self.assertEqual(len(dt1_associations), 1)
+            self.assertEqual(dt1_associations[0]["dataset_id"], ref2.id.bytes)
+            self.assertEqual(dt1_associations[0]["run"], "runs/def")
+            self.assertEqual(dt1_associations[0]["instrument"], "LSSTCam")
+            self.assertEqual(dt1_associations[0]["visit"], 2025120200440)
+            self.assertEqual(dt1_associations[0]["collection"], "tag")
+            self.assertEqual(dt1_associations[0]["timespan"], Timespan(None, None))
+            dt2_associations = read_table(tmpdir_path.joinpath("dt2.association.parquet")).to_pylist()
+            self.assertEqual(dt2_associations, [])
+            dt3_associations = read_table(tmpdir_path.joinpath("dt3.association.parquet")).to_pylist()
+            self.assertEqual(dt3_associations, [])
+            dt4_associations = read_table(tmpdir_path.joinpath("dt4.association.parquet")).to_pylist()
+            self.assertEqual(len(dt4_associations), 1)
+            self.assertEqual(dt4_associations[0]["dataset_id"], ref5.id.bytes)
+            self.assertEqual(dt4_associations[0]["run"], "runs/abc")
+            self.assertEqual(dt4_associations[0]["instrument"], "LSSTCam")
+            self.assertEqual(dt4_associations[0]["detector"], 10)
+            self.assertEqual(dt4_associations[0]["collection"], "calib")
+            self.assertEqual(dt4_associations[0]["timespan"], certification_timespan)
 
             # Import to a new repo and make sure it round-trips.
             import_repo = self.enterContext(tempfile.TemporaryDirectory())

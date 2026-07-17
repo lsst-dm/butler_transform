@@ -49,7 +49,9 @@ that may be associated with datasets (e.g. visit metadata).
 with dimension record primary keys, as well as their run collections.
 - `*.datastore.parquet` -- Butler datastore records containing file paths and
 other metadata about the artifacts associated with datasets.
-- `collections.parquet` Butler collections associated with the exported datasets.
+- `*.associations.parquet` -- Tracks membership of datasets in Butler TAGGED
+and CHAINED collections.
+- `collections.parquet` -- Butler collections associated with the exported datasets.
 
 
 ## Why this library is using anyio instead of stdlib asyncio
