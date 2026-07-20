@@ -135,6 +135,7 @@ def _modify_exported_files(export_directory: Path) -> None:
 
     with initialize_duckdb_connection() as db:
         _remove_unwanted_skymap(db, import_info)
+        _filter_unused_visits(db, import_info)
 
 
 def _fix_catalog_dataset_types(import_info: DataReleaseImportInfo) -> None:
@@ -149,6 +150,71 @@ def _fix_catalog_dataset_types(import_info: DataReleaseImportInfo) -> None:
 
     with open(import_info.manifest_path, "wb") as fh:
         fh.write(manifest.model_dump_json(indent=2).encode("utf-8"))
+
+
+def _filter_unused_visits(db: DuckDBPyConnection, import_info: DataReleaseImportInfo) -> None:
+    """Remove visit and exposure dimension records that are present in the
+    ``dp2_prep`` Butler repository, but are not referenced by any datasets
+    included in the DP2 release.
+    """
+    # Find all of the visits and exposures directly referenced in data IDs from
+    # datasets.
+    all_dataset_files = [str(dt.dataset_export_file) for dt in import_info.get_dataset_inputs()]
+    all_dataset_tables = db.from_parquet(all_dataset_files, union_by_name=True)
+    dataset_visits = all_dataset_tables.select("instrument", "visit").distinct()
+    dataset_exposures = all_dataset_tables.select("instrument", "exposure").distinct()
+
+    # Find visits corresponding to exposures from datasets, and vice-versa.
+    # This is necessary if, for example, we have raws present in the data
+    # release that didn't ultimately produce any visit-keyed datasets
+    # downstream.
+    visit_definition_table = db.from_parquet(str(import_info.get_dimension_record_input("visit_definition")))
+    visit_exposures = visit_definition_table.join(dataset_visits, "instrument, visit").select(
+        "instrument", "exposure"
+    )
+    exposure_visits = visit_definition_table.join(dataset_exposures, "instrument, exposure").select(
+        "instrument", "visit"
+    )
+
+    # Combine records from datasets with records found from the
+    # visit_definition table.
+    all_visits = dataset_visits.union(exposure_visits).distinct().set_alias("vis")
+    all_exposures = dataset_exposures.union(visit_exposures).distinct().set_alias("exp")
+
+    _modify_parquet_file(
+        db,
+        import_info.get_dimension_record_input("exposure"),
+        lambda rel: (
+            rel.set_alias("orig")
+            .join(all_exposures, "orig.instrument = exp.instrument AND orig.id = exp.exposure", "semi")
+            .order("instrument, id")
+        ),
+    )
+    _modify_parquet_file(
+        db,
+        import_info.get_dimension_record_input("visit"),
+        lambda rel: (
+            rel.set_alias("orig")
+            .join(all_visits, "orig.instrument = vis.instrument AND orig.id = vis.visit", "semi")
+            .order("instrument, id")
+        ),
+    )
+    for file in ("visit_detector_region", "visit_system_membership"):
+        _modify_parquet_file(
+            db,
+            import_info.get_dimension_record_input(file),
+            lambda rel: rel.join(all_visits, "instrument, visit", "semi").order("instrument, visit"),
+        )
+    _modify_parquet_file(
+        db,
+        import_info.get_dimension_record_input("visit_definition"),
+        lambda rel: (
+            rel.join(all_exposures, "instrument, exposure", "semi")
+            .union(rel.join(all_visits, "instrument, visit", "semi"))
+            .distinct()
+            .order("instrument, visit")
+        ),
+    )
 
 
 def _remove_unwanted_skymap(db: DuckDBPyConnection, import_info: DataReleaseImportInfo) -> None:
