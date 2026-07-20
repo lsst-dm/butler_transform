@@ -58,8 +58,8 @@ class DataReleaseImportInfo:
 
     def __init__(self, export_directory: str | Path) -> None:
         self._directory = Path(export_directory).resolve()
-        manifest_path = self._get_absolute_path("manifest.json")
-        self.manifest = DataReleaseExportManifest.model_validate_json(manifest_path.read_text())
+        self.manifest_path = self._get_absolute_path("manifest.json")
+        self.manifest = DataReleaseExportManifest.model_validate_json(self.manifest_path.read_text())
         self.universe = DimensionUniverse(self.get_dimension_config())
 
     def get_dimension_config(self) -> DimensionConfig:

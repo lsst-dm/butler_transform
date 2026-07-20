@@ -131,8 +131,24 @@ async def _export_dp2_async(repo: str, output_path: Path) -> Path:
 
 def _modify_exported_files(export_directory: Path) -> None:
     import_info = DataReleaseImportInfo(export_directory)
+    _fix_catalog_dataset_types(import_info)
+
     with initialize_duckdb_connection() as db:
         _remove_unwanted_skymap(db, import_info)
+
+
+def _fix_catalog_dataset_types(import_info: DataReleaseImportInfo) -> None:
+    """Update the storage class for ``dia_object`` and ``dia_source`` from
+    ``DataFrame`` to ``ArrowAstropy``, to give the desired default loading
+    behavior for ``Butler.get()``.
+    """
+    manifest = import_info.manifest
+    for dt in manifest.datasets:
+        if dt.dataset_type.name in ("dia_object", "dia_source"):
+            dt.dataset_type.storageClass = "ArrowAstropy"
+
+    with open(import_info.manifest_path, "wb") as fh:
+        fh.write(manifest.model_dump_json(indent=2).encode("utf-8"))
 
 
 def _remove_unwanted_skymap(db: DuckDBPyConnection, import_info: DataReleaseImportInfo) -> None:
