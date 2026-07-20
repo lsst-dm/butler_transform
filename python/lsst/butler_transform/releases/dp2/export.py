@@ -34,8 +34,10 @@ from collections.abc import Callable
 from pathlib import Path
 
 import click
+import rich.console
+import rich.table
 from duckdb import ColumnExpression, ConstantExpression, DuckDBPyConnection, DuckDBPyRelation
-from pyarrow.parquet import read_schema
+from pyarrow.parquet import read_metadata, read_schema
 
 from ...export.export_data_release import export_data_release
 from ...importer.import_data_release import DataReleaseImportInfo
@@ -114,7 +116,7 @@ def export_dp2(repo: str) -> None:
     output_path = Path.cwd().joinpath("dp2-export")
     asyncio.run(_export_dp2_async(repo, output_path))
     _modify_exported_files(output_path)
-    print(f"Exported data written to {output_path}")
+    _print_summary(output_path)
 
 
 async def _export_dp2_async(repo: str, output_path: Path) -> Path:
@@ -254,6 +256,32 @@ def _modify_parquet_file(
         output_relation = function(db.from_parquet(str(path)))
         write_duckdb_results_to_parquet(output_relation, str(output_temp_file), schema=schema)
         os.replace(output_temp_file, path)
+
+
+def _print_summary(export_directory: Path) -> None:
+    import_info = DataReleaseImportInfo(export_directory)
+    console = rich.console.Console()
+    console.print(f"Exported data written to {export_directory}")
+    table = rich.table.Table("Dimension", "Record Count", title="Dimension Records")
+    for dim, file in sorted(import_info.get_dimension_record_inputs().items(), key=lambda x: x[0].name):
+        table.add_row(dim.name, _get_row_count(file))
+    console.print(table)
+
+    table = rich.table.Table(
+        "Dataset Type", "Datasets", "Datastore Entries", "Associations", title="Datasets"
+    )
+    for dt in sorted(import_info.get_dataset_inputs(), key=lambda dt: dt.dataset_type.name):
+        table.add_row(
+            dt.dataset_type.name,
+            _get_row_count(dt.dataset_export_file),
+            _get_row_count(dt.datastore_export_file),
+            _get_row_count(dt.association_export_file),
+        )
+    console.print(table)
+
+
+def _get_row_count(parquet_path: Path) -> str:
+    return str(read_metadata(parquet_path).num_rows)
 
 
 if __name__ == "__main__":
