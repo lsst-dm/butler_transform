@@ -27,7 +27,9 @@
 
 from collections.abc import Iterator, Sequence
 
-from ..utils.duckdb import initialize_duckdb_connection
+from duckdb import DuckDBPyRelation
+
+from ..utils.duckdb import fetch_batches_of_scalars, initialize_duckdb_connection
 
 
 def get_file_list_from_datastore_export(
@@ -52,8 +54,27 @@ def get_file_list_from_datastore_export(
         A list of filenames, no larger than the given ``batch_size``.
     """
     with initialize_duckdb_connection() as conn:
-        cursor = (
-            conn.from_parquet(datastore_export_files).select("split_part(path, '#', 1)").distinct().execute()
+        yield from fetch_batches_of_scalars(
+            get_file_list_relation(conn.from_parquet(datastore_export_files)), batch_size=batch_size
         )
-        while batch := cursor.fetchmany(batch_size):
-            yield [row[0] for row in batch]
+
+
+def get_file_list_relation(datastore_records: DuckDBPyRelation) -> DuckDBPyRelation:
+    """Extract list of files from `DatastoreRecordTable` data.
+
+    Parameters
+    ----------
+    datastore_records
+        A DuckDB relation containing the columns from a `DatastoreRecordTable`
+        parquet file.
+
+    Returns
+    -------
+    file_list
+        A single column relation containing the URIs to artifact files
+        represented by the datastore records.  The list is de-duplicated and
+        paths have URI fragments removed, so the output contains one entry for
+        each physical file (rather than one entry for each input datastore
+        record.)
+    """
+    return datastore_records.select("split_part(path, '#', 1)").distinct()

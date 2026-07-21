@@ -31,7 +31,7 @@ import tempfile
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
-from typing import Unpack
+from typing import Any, Unpack
 
 import pyarrow
 from anyio import TASK_STATUS_IGNORED, CapacityLimiter, to_thread
@@ -146,3 +146,43 @@ def write_duckdb_results_to_parquet(
                 writer.write_batch(batch.cast(schema))
     finally:
         reader.close()
+
+
+def fetch_batches_of_scalars(relation: DuckDBPyRelation, batch_size: int = 10_000) -> Iterator[list[Any]]:
+    """Given a relation with a single column, return an iterator over its
+    results as lists of scalars.
+
+    Parameters
+    ----------
+    relation
+        A DuckDB relation with a single column.
+    batch_size
+        Number of results to return from each chunk of the iterator.
+
+    Yields
+    ------
+    batch
+        List of scalars of at most ``batch_size`` items.
+    """
+    cursor = relation.execute()
+    while batch := cursor.fetchmany(batch_size):
+        yield [row[0] for row in batch]
+
+
+def fetch_scalar(relation: DuckDBPyRelation) -> Any:
+    """Given a DuckDB relation containing a single row and a single column,
+    return it as a scalar value.
+
+    Parameters
+    ----------
+    relation
+        A DuckDB relation with a single row and single column.
+
+    Returns
+    -------
+    The scalar value contained in the relation.
+    """
+    result = relation.fetchone()
+    if result is None:
+        raise AssertionError("Expected 1 row, but got 0")
+    return result[0]
