@@ -33,7 +33,7 @@ from typing import Iterable
 
 from anyio import CapacityLimiter, create_task_group
 
-from lsst.butler_transform.importer.import_datasets import DatasetImporter
+from lsst.butler_transform.importer.import_datasets import DatasetImporter, DatastoreTransformFunction
 from lsst.butler_transform.importer.import_dimension_records import (
     DimensionRecordImporter,
 )
@@ -102,7 +102,11 @@ class DatasetImportInfo:
     datastore_export_file: Path
 
 
-async def import_data_release(butler_repo: str, import_info: DataReleaseImportInfo) -> None:
+async def import_data_release(
+    butler_repo: str,
+    import_info: DataReleaseImportInfo,
+    datastore_transform_function: DatastoreTransformFunction | None = None,
+) -> None:
     """Import a set of data release parquet files to a Butler repository, given
     an object containing the top-level metadata from an export dump.
     """
@@ -143,7 +147,13 @@ async def import_data_release(butler_repo: str, import_info: DataReleaseImportIn
                 limiter = CapacityLimiter(max(1, _MAX_BUTLER_CONNECTIONS // 4))
                 for ds in dataset_inputs:
                     tg.start_soon(
-                        _import_datasets_when_ready, butler_pool, ds, limiter, dimension_tracker, progress
+                        _import_datasets_when_ready,
+                        butler_pool,
+                        ds,
+                        limiter,
+                        dimension_tracker,
+                        progress,
+                        datastore_transform_function,
                     )
 
 
@@ -158,11 +168,14 @@ async def _import_datasets_when_ready(
     limiter: CapacityLimiter,
     dimension_tracker: DimensionDependencyTracker,
     progress_display: DataReleaseImportProgressDisplay,
+    datastore_transform_function: DatastoreTransformFunction | None,
 ) -> None:
     await dimension_tracker.wait_until_required_dimensions_complete(info.dataset_type.dimensions)
     async with limiter:
         importer = DatasetImporter(butler_pool, info.dataset_type)
         await importer.import_datasets(info.dataset_export_file, progress_display.handle_dataset_import_event)
         await importer.import_datastore(
-            info.datastore_export_file, progress_display.handle_datastore_import_event
+            info.datastore_export_file,
+            progress_display.handle_datastore_import_event,
+            datastore_transform_function,
         )

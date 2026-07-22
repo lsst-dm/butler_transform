@@ -23,35 +23,20 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.from collections.abc import Iterable
+# along with this program.  If not, see <http://www.gnu.org/licenses/>
 
-from __future__ import annotations
-
-from pathlib import Path
-
-import pyarrow
-
-from lsst.daf.butler._rubin.datastore_records import DatastoreRecordTable
-
-from .async_parquet_reader import TableReaderBase
-from .async_parquet_writer import AsyncParquetWriter
+from multiprocessing import get_all_start_methods, get_context
+from multiprocessing.context import BaseContext
 
 
-class DatastoreParquetWriter(AsyncParquetWriter):
-    """Writes parquet files equivalent to Butler FileDatastore records."""
-
-    def __init__(self, output_path: str | Path) -> None:
-        super().__init__(output_path, DatastoreRecordTable.make_arrow_schema())
-
-    async def write_records(self, table: DatastoreRecordTable) -> None:
-        """Append records from Butler Datastore asynchronously."""
-        await self.write_table(table.to_arrow())
-
-    def write_records_sync(self, table: DatastoreRecordTable) -> None:
-        """Append records from Butler Datastore."""
-        self.write_table_sync(table.to_arrow())
-
-
-class DatastoreParquetReader(TableReaderBase[DatastoreRecordTable]):
-    def _convert_table(self, table: pyarrow.Table) -> DatastoreRecordTable:
-        return DatastoreRecordTable.from_arrow(table)
+def get_clean_mp_context(preload_modules: list[str] | None = None) -> BaseContext:
+    """Return a multiprocessing context that is safe to use even if the host
+    process has threads, sockets, or other problematic objects open.
+    """
+    if "forkserver" in get_all_start_methods():
+        context = get_context("forkserver")
+        if preload_modules:
+            context.set_forkserver_preload(preload_modules)
+        return context
+    else:
+        return get_context("spawn")
