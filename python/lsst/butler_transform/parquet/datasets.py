@@ -27,14 +27,15 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Iterable, Sequence
 from functools import cache
 from pathlib import Path
 from typing import override
 
 import pyarrow
 
-from lsst.daf.butler import DatasetId, DatasetRef, DatasetType, DimensionGroup
+from lsst.daf.butler import DatasetAssociation, DatasetId, DatasetRef, DatasetType, DimensionGroup, Timespan
+from lsst.daf.butler.arrow_utils import TimespanArrowType
 
 from .async_parquet_reader import AsyncParquetReader, TableReaderBase
 from .async_parquet_writer import AsyncParquetWriter
@@ -49,6 +50,18 @@ class DatasetsParquetWriter(AsyncParquetWriter):
     def add_refs_sync(self, refs: DatasetRefTable) -> None:
         """Append a batch of datasets to the parquet file."""
         self.write_table_sync(refs.table)
+
+
+class DatasetAssociationParquetWriter(AsyncParquetWriter):
+    """Writes Butler `lsst.daf.butler.DatasetAssociation` instances to a parquet file."""
+
+    def __init__(self, output_file: str | Path, dataset_type: DatasetType) -> None:
+        super().__init__(output_file, _create_association_arrow_schema(dataset_type.dimensions))
+        self._dataset_type = dataset_type
+
+    def add_associations_sync(self, associations: Sequence[DatasetAssociation]) -> None:
+        table = DatasetAssociationTable.from_associations(self._dataset_type, associations)
+        self.write_table_sync(table.table)
 
 
 async def read_dataset_ids(input_file: str | Path) -> AsyncIterator[list[DatasetId]]:
@@ -91,6 +104,46 @@ class DatasetRefTable:
         return len(self.table)
 
 
+class DatasetAssociationTable:
+    """`pyarrow.Table` representation of `lsst.daf.butler.DatasetAssociation`
+    data.
+    """
+
+    COLLECTION_FIELD_TYPE = pyarrow.dictionary(pyarrow.int32(), pyarrow.string())
+    TIMESPAN_FIELD_TYPE = TimespanArrowType()
+    COLLECTION_FIELD = pyarrow.field(
+        "collection",
+        COLLECTION_FIELD_TYPE,
+        nullable=False,
+    )
+    TIMESPAN_FIELD = pyarrow.field("timespan", TIMESPAN_FIELD_TYPE, nullable=True)
+
+    def __init__(self, dataset_type: DatasetType, table: pyarrow.Table) -> None:
+        self.dataset_type = dataset_type
+        self.table = table
+
+    @classmethod
+    def from_associations(
+        cls, dataset_type: DatasetType, associations: Sequence[DatasetAssociation]
+    ) -> DatasetAssociationTable:
+        """Convert `lsst.daf.butler.DatasetAssociations` objects to an Arrow
+        table.
+        """
+        ref_table = DatasetRefTable.from_refs(dataset_type, [assoc.ref for assoc in associations])
+        collection_column = pyarrow.array(
+            [assoc.collection for assoc in associations], type=cls.COLLECTION_FIELD_TYPE
+        )
+        timespan_column = pyarrow.array(
+            [_convert_timespan_to_dict(assoc.timespan) for assoc in associations],
+            type=cls.TIMESPAN_FIELD_TYPE,
+        )
+        table = ref_table.table.append_column(cls.COLLECTION_FIELD, collection_column).append_column(
+            cls.TIMESPAN_FIELD, timespan_column
+        )
+
+        return DatasetAssociationTable(dataset_type, table)
+
+
 class DatasetsParquetReader(TableReaderBase[DatasetRefTable]):
     """Reads `lsst.daf.butler.DatasetRef` rows from a parquet file."""
 
@@ -104,16 +157,22 @@ class DatasetsParquetReader(TableReaderBase[DatasetRefTable]):
 
 
 @cache
-def _create_dataset_arrow_schema(
-    dimensions: DimensionGroup, additional_columns: tuple[pyarrow.Field, ...] = ()
-) -> pyarrow.Schema:
+def _create_dataset_arrow_schema(dimensions: DimensionGroup) -> pyarrow.Schema:
     fields = [
         pyarrow.field("dataset_id", pyarrow.binary(16), nullable=False),
         pyarrow.field("run", pyarrow.dictionary(pyarrow.int32(), pyarrow.string()), nullable=False),
         *_get_data_id_column_schemas(dimensions),
-        *additional_columns,
     ]
     return pyarrow.schema(fields)
+
+
+@cache
+def _create_association_arrow_schema(dimensions: DimensionGroup) -> pyarrow.Schema:
+    return (
+        _create_dataset_arrow_schema(dimensions)
+        .append(DatasetAssociationTable.COLLECTION_FIELD)
+        .append(DatasetAssociationTable.TIMESPAN_FIELD)
+    )
 
 
 def _get_data_id_column_schemas(dimensions: DimensionGroup) -> list[pyarrow.Field]:
@@ -136,3 +195,8 @@ def _convert_parquet_uuid_to_dataset_id(dataset_id_binary: object) -> DatasetId:
         f"Dataset ID expected to be serialized as binary bytes, got {type(dataset_id_binary)}"
     )
     return DatasetId(bytes=dataset_id_binary)
+
+
+def _convert_timespan_to_dict(value: Timespan | None) -> dict[str, int] | None:
+    """Convert Timespan to a representation that pyarrow understands."""
+    return {"begin_nsec": value.nsec[0], "end_nsec": value.nsec[1]} if value is not None else None

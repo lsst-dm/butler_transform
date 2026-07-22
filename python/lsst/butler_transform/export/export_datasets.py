@@ -32,54 +32,230 @@ from collections.abc import Iterable
 from itertools import batched
 from pathlib import Path
 
-from lsst.daf.butler import Butler, DatasetType
+from anyio import CapacityLimiter, TemporaryDirectory, create_task_group
+from anyio.abc import TaskStatus
+from duckdb import DuckDBPyConnection
+from pyarrow.parquet import read_schema
+from pydantic import BaseModel
 
-from ..parquet.datasets import DatasetRefTable, DatasetsParquetWriter
+from lsst.daf.butler import (
+    Butler,
+    CollectionInfo,
+    CollectionType,
+    DatasetAssociation,
+    DatasetType,
+    SerializedDatasetType,
+)
+
+from ..parquet.datasets import DatasetAssociationParquetWriter, DatasetRefTable, DatasetsParquetWriter
 from ..utils.butler_pool import ButlerPool
+from ..utils.duckdb import DuckDbPool, write_duckdb_results_to_parquet
+from .export_datastore import DatastoreExporter
 
 
-@dataclasses.dataclass
-class ExportDatasetsResult:
-    run_collections_found: set[str]
-    """List of run collection names that were referenced by datasets found
-    during the export process.
-    """
-
-
-async def export_datasets(
-    butler_pool: ButlerPool,
-    dataset_type: DatasetType,
-    collections: Iterable[str],
-    output_parquet_path: Path,
-) -> ExportDatasetsResult:
-    """Export `lsst.daf.butler.DatasetRef` information to a parquet file.
+class DatasetExporter:
+    """Exports Butler datasets and related information to parquet files.
 
     Parameters
     ----------
     butler_pool
-        Pool of Butler instances used to fetch data.
-    dataset_type
-        Type of datasets to export.
-    collections
-        List of collections containing the datasets to be exported.
-    output_parquet_path
-        Path where we will write a parquet file containing the datastore
-        records.
-
-    Returns
-    -------
-    result
-        Result object containing information about the exported datasets.
+        Pool of Butler instances to use for querying datasets.
+    duckdb_pool
+        Pool of DuckDB connections to use for working with parquet files.
+    output_directory
+        Directory where exported dataset files will be written.
     """
 
-    run_collections_found = await butler_pool.run_with_butler(
-        _export_datasets_sync,
-        dataset_type,
-        collections,
-        output_parquet_path,
-    )
+    def __init__(
+        self, butler_pool: ButlerPool, duckdb_pool: DuckDbPool, output_directory: Path | str
+    ) -> None:
+        self._butler_pool = butler_pool
+        self._duckdb_pool = duckdb_pool
+        self._output_directory = Path(output_directory)
+        # Prevent file handle and memory exhaustion by limiting the total
+        # number of exports running simultaneously.
+        self._limiter = CapacityLimiter(butler_pool.max_connections)
+        self._datastore_exporter = DatastoreExporter(self._butler_pool)
 
-    return ExportDatasetsResult(run_collections_found=run_collections_found)
+    async def export(self, dataset_types: Iterable[str], collections: Iterable[str]) -> DatasetExportResult:
+        """Export Butler dataset metadata.
+
+        Parameters
+        ----------
+        dataset_types
+            Names of Butler dataset types to be exported.
+        collections
+            Names of Butler collections that will be searched for datasets to
+            export.
+
+        Returns
+        -------
+        result
+            An object containing information about datasets and collections
+            found during the search.
+        """
+        resolved_dataset_types = await self._butler_pool.run_with_butler(
+            _resolve_dataset_types, list(dataset_types)
+        )
+
+        # Snapshot the set of collections that we will be querying against.
+        resolved_collections = await self._butler_pool.run_with_butler(
+            _resolve_collections, list(collections)
+        )
+        # Drop chained collections to get only the concrete collections we will search for.
+        search_collections = [c.name for c in resolved_collections if c.type != CollectionType.CHAINED]
+        association_collections = [
+            c.name
+            for c in resolved_collections
+            if (c.type == CollectionType.CALIBRATION or c.type == CollectionType.TAGGED)
+        ]
+
+        context = _DatasetExportContext(
+            search_collections=search_collections, association_collections=association_collections
+        )
+        async with create_task_group() as tg:
+            for dt in resolved_dataset_types:
+                await tg.start(self._export_single_dataset_type, context, dt)
+
+        output_collections = list(resolved_collections)
+        extra_run_collections = context.run_collections_found - set([c.name for c in resolved_collections])
+        if extra_run_collections:
+            output_collections.extend(
+                await self._butler_pool.run_with_butler(_resolve_collections, extra_run_collections)
+            )
+
+        return DatasetExportResult(manifests=context.manifests, collections_referenced=output_collections)
+
+    async def _export_single_dataset_type(
+        self, context: _DatasetExportContext, dataset_type: DatasetType, *, task_status: TaskStatus
+    ) -> None:
+        async with self._limiter:
+            task_status.started()
+            manifest = context.add_manifest(dataset_type)
+            dataset_parquet_path = self._output_directory.joinpath(manifest.dataset_export_file)
+            run_collections_found = await self._butler_pool.run_with_butler(
+                _export_datasets_sync,
+                dataset_type,
+                context.search_collections,
+                dataset_parquet_path,
+            )
+            context.add_found_run_collections(run_collections_found)
+
+            async with create_task_group() as tg:
+                tg.start_soon(
+                    self._datastore_exporter.export_from_dataset_parquet,
+                    dataset_parquet_path,
+                    self._output_directory.joinpath(manifest.datastore_export_file),
+                )
+                tg.start_soon(
+                    self._export_associations,
+                    context,
+                    dataset_type,
+                    dataset_parquet_path,
+                    self._output_directory.joinpath(manifest.association_export_file),
+                )
+        print(f"{dataset_type.name}: complete")
+
+    async def _export_associations(
+        self,
+        context: _DatasetExportContext,
+        dataset_type: DatasetType,
+        dataset_parquet_path: Path,
+        output_path: Path,
+    ) -> None:
+        async with TemporaryDirectory() as tempdir:
+            temp_path = Path(tempdir) / "association.parquet"
+            await self._butler_pool.run_with_butler(
+                _export_associations_sync, dataset_type, context.association_collections, temp_path
+            )
+            await self._duckdb_pool.run_with_duckdb(
+                _filter_associations_by_matching_datasets, temp_path, dataset_parquet_path, output_path
+            )
+
+
+@dataclasses.dataclass
+class DatasetExportResult:
+    manifests: list[DatasetExportManifest]
+    """Information about dataset types and the export output files."""
+    collections_referenced: list[CollectionInfo]
+    """List of collections referenced by the dataset search.  This includes:
+
+    1. The resolved, flattened version of the input collections to the search.
+    2. Run collections associated with datasets found via a tagged or
+    calibration collection.
+    """
+
+
+class DatasetExportManifest(BaseModel):
+    """Manifest for a single dataset type in the data release export."""
+
+    dataset_type: SerializedDatasetType
+    """Dataset type definition."""
+    dataset_export_file: str
+    """Path to parquet file containing the exported
+    `lsst.daf.butler.DatasetRef` dataset records.
+    """
+    datastore_export_file: str
+    """Path to parquet file containing the exported Butler datastore
+    records.
+    """
+    association_export_file: str
+    """Path to parquet file containing the association of datasets with tag and
+    calibration collections.
+    """
+
+
+class _DatasetExportContext:
+    def __init__(self, search_collections: Iterable[str], association_collections: Iterable[str]) -> None:
+        self.search_collections = tuple(search_collections)
+        self.association_collections = tuple(association_collections)
+        self.run_collections_found = set[str]()
+        self.manifests = list[DatasetExportManifest]()
+
+    def add_manifest(self, dataset_type: DatasetType) -> DatasetExportManifest:
+        dataset_filename = f"{dataset_type.name}.datasets.parquet"
+        datastore_filename = f"{dataset_type.name}.datastore.parquet"
+        association_filename = f"{dataset_type.name}.association.parquet"
+        manifest = DatasetExportManifest(
+            dataset_type=dataset_type.to_simple(),
+            dataset_export_file=dataset_filename,
+            datastore_export_file=datastore_filename,
+            association_export_file=association_filename,
+        )
+        self.manifests.append(manifest)
+        return manifest
+
+    def add_found_run_collections(self, collection_names: Iterable[str]) -> None:
+        """Add the list of run collections found during a dataset search to the accumulated list.
+
+        Notes
+        -----
+        Datasets found via tagged or calibration collections may reference run
+        collections that are not present in the initial list of collections, so
+        we accumulate a list of all collections encountered during export to get
+        the complete set of collections related to the exported datasets.
+        """
+        self.run_collections_found.update(collection_names)
+
+
+def _resolve_dataset_types(butler: Butler, dataset_types: Iterable[str]) -> tuple[DatasetType, ...]:
+    missing_dataset_types: list[str] = []
+    resolved_dataset_types = tuple(
+        butler.registry.queryDatasetTypes(
+            dataset_types,
+            missing=missing_dataset_types,
+        )
+    )
+    if missing_dataset_types:
+        raise RuntimeError(f"Required dataset types not present in repository: {missing_dataset_types}")
+
+    return resolved_dataset_types
+
+
+def _resolve_collections(butler: Butler, collections: Iterable[str]) -> Iterable[CollectionInfo]:
+    return butler.collections.query_info(
+        collections, include_chains=True, flatten_chains=True, include_doc=True
+    )
 
 
 def _export_datasets_sync(
@@ -97,3 +273,43 @@ def _export_datasets_sync(
             writer.add_refs_sync(table)
             print(f"{dataset_type}: {len(table)} datasets")
     return run_collections_found
+
+
+def _export_associations_sync(
+    butler: Butler,
+    dataset_type: DatasetType,
+    collections: Iterable[str],
+    output_parquet_path: Path,
+) -> None:
+    with (
+        DatasetAssociationParquetWriter(output_parquet_path, dataset_type) as writer,
+        butler.query() as query,
+    ):
+        query = query.join_dataset_search(dataset_type, collections)
+        result = query.general(
+            dataset_type.dimensions,
+            dataset_fields={dataset_type.name: {"dataset_id", "run", "collection", "timespan"}},
+            find_first=False,
+        )
+        associations = DatasetAssociation.from_query_result(result, dataset_type)
+        for batch in batched(associations, 50_000):
+            writer.add_associations_sync(batch)
+
+
+def _filter_associations_by_matching_datasets(
+    conn: DuckDBPyConnection,
+    association_parquet_file: Path,
+    dataset_parquet_file: Path,
+    output_parquet_file: Path,
+) -> None:
+    """Generate a new parquet file from the association parquet file, removing
+    rows that do not have corresponding entries in the dataset parquet file,
+    and sorting by collection name.
+    """
+    rel = (
+        conn.from_parquet(str(association_parquet_file))
+        .join(conn.from_parquet(str(dataset_parquet_file)), "dataset_id", how="semi")
+        .order("collection")
+    )
+    schema = read_schema(association_parquet_file)
+    write_duckdb_results_to_parquet(rel, output_parquet_file, schema)
