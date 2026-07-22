@@ -30,6 +30,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import click
+
 from ...export.export_data_release import export_data_release
 from ...utils.butler_process_pool import ButlerProcessPool
 
@@ -38,16 +40,19 @@ from ...utils.butler_process_pool import ButlerProcessPool
 DATASET_TYPES = (
     # 1.3 Non-image, non-qserv table Butler datasets
     "object_scarlet_models",
+    "visit_summary",
+    "deep_coadd_input_summary",
+    "compare_warp_artifact_mask",
+    # Property maps
+    "deepCoadd_*_consolidated_map_*",
     # 1.4 Image datasets
     "raw",
     "visit_image",
     "deep_coadd",
     "template_coadd",
     "difference_image",
-    # "future_visit_image",  # missing, requested for pilot run only
     # 1.5 QSERV Table Products
     "object",
-    "object_parent",
     "isolated_star_stellar_motions",
     "object_shear_all",
     "source",
@@ -57,8 +62,6 @@ DATASET_TYPES = (
     "dia_source",
     "ss_object",
     "ss_source",
-    # "current_identifications", missing
-    # "numbered_identifications", missing
     "visit_table",
     "visit_detector_table",
     # 1.6 Calibration products and ancillary inputs
@@ -71,12 +74,12 @@ DATASET_TYPES = (
     "linearizer",
     "crosstalk",
     "cti",
-    # "illuminationCorrection", missing
     "ptc",
     "the_monster_20250219",
     "fgcmLookUpTable",
     "skyMap",
     "standard_passband",
+    "pretrainedModelPackage",
     # Provenance
     "run_provenance",
 )
@@ -87,8 +90,25 @@ COLLECTIONS = ("LSSTCam/runs/DRP/DP2",)
 _MAX_BUTLER_CONNECTIONS = 32
 
 
-async def export_dp2() -> None:
-    async with ButlerProcessPool.from_config("dp2_prep", _MAX_BUTLER_CONNECTIONS) as butler_pool:
+@click.command
+@click.option(
+    "--repo",
+    # dp2_prep_future and dp2_prep repositories at USDF are the same underlying
+    # repository.  The difference between the two is that dp2_prep_future is
+    # configured to use the new lsst.images file format for deep_coadd images,
+    # while dp2_prep still uses the legacy format.  See DM-55060 for more
+    # information.
+    #
+    # The official DP2 release uses the new file format, so we point at
+    # dp2_prep_future.
+    default="dp2_prep_future",
+)
+def export_dp2(repo: str) -> None:
+    asyncio.run(_export_dp2_async(repo))
+
+
+async def _export_dp2_async(repo: str) -> None:
+    async with ButlerProcessPool.from_config(repo, _MAX_BUTLER_CONNECTIONS) as butler_pool:
         await export_data_release(
             butler_pool,
             output_directory=Path.cwd().joinpath("dp2-export"),
@@ -98,4 +118,4 @@ async def export_dp2() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(export_dp2())
+    export_dp2()

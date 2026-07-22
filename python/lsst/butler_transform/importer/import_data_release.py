@@ -27,6 +27,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -76,10 +77,14 @@ class DataReleaseImportInfo:
         }
 
     def get_collection_input(self) -> Path:
+        """Return the absolute path to the parquet file containing collection
+        information.
+        """
         return self._get_absolute_path(self.manifest.collection_export_file)
 
-    def get_dataset_inputs(self) -> list[DatasetImportInfo]:
-        return [
+    def get_dataset_inputs(self, subset: Iterable[str] | None = None) -> list[DatasetImportInfo]:
+        """Return information about each dataset type included in the export."""
+        import_info = [
             DatasetImportInfo(
                 dataset_type=DatasetType.from_simple(ds.dataset_type, self.universe),
                 dataset_export_file=self._get_absolute_path(ds.dataset_export_file),
@@ -87,6 +92,19 @@ class DataReleaseImportInfo:
             )
             for ds in self.manifest.datasets
         ]
+
+        if subset is None:
+            return import_info
+
+        available_dataset_types = [info.dataset_type.name for info in import_info]
+        found_dataset_types = set[str]()
+        for glob in subset:
+            matches = fnmatch.filter(available_dataset_types, glob)
+            if not matches:
+                raise ValueError(f"Requested dataset type pattern '{glob}' is not present in export dump")
+            found_dataset_types.update(matches)
+
+        return [info for info in import_info if info.dataset_type.name in found_dataset_types]
 
     def _get_absolute_path(self, suffix: str) -> Path:
         path = self._directory.joinpath(suffix).resolve()
@@ -105,6 +123,7 @@ class DatasetImportInfo:
 async def import_data_release(
     butler_repo: str,
     import_info: DataReleaseImportInfo,
+    dataset_types: Iterable[str] | None = None,
     datastore_transform_function: DatastoreTransformFunction | None = None,
 ) -> None:
     """Import a set of data release parquet files to a Butler repository, given
@@ -113,7 +132,7 @@ async def import_data_release(
     async with ButlerProcessPool.from_config(
         butler_repo, _MAX_BUTLER_CONNECTIONS, writeable=True
     ) as butler_pool:
-        dataset_inputs = import_info.get_dataset_inputs()
+        dataset_inputs = import_info.get_dataset_inputs(subset=dataset_types)
         with DataReleaseImportProgressDisplay(dataset_type_count=len(dataset_inputs)).run() as progress:
             # Registering dataset types creates tables and indexes, so do it first
             # to avoid thinking about what the locking implications might be if we

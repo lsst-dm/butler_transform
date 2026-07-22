@@ -31,54 +31,54 @@ from tempfile import TemporaryDirectory
 import click
 
 from lsst.daf.butler import Butler, Config
-from lsst.daf.butler._rubin.datastore_records import DatastoreRecordTable
 
 from ...importer.import_data_release import DataReleaseImportInfo, import_data_release
-from ...transform.rewrite_datastore_paths import map_absolute_uris_to_datastores
-from ._datastore_map import DP2_DATASTORE_MAP
+from ._datastore_map import generate_dp2_datastore_config, map_files_to_dp2_datastores
+from ._mini_subset import DP2_MINI_SUBSET
 
 
 @click.command
 @click.argument("export_directory")
+@click.argument("schema")
 @click.argument("database_uri")
-@click.option("--schema", default=None)
-def import_dp2(export_directory: str, database_uri: str, schema: str | None) -> None:
+@click.option("--mini", is_flag=True)
+def import_dp2(export_directory: str, schema: str, database_uri: str, mini: bool) -> None:
+    """Set up the Butler database for DP2, starting from an empty database.
+
+    Parameters
+    ----------
+    export_directory
+        Path to a directory containing an exported parquet copy of the DP2
+        Butler database.
+    schema
+        Database schema name that the imported database will be written into.
+    database_uri
+        Postgres URI for the database server that will be written into.
+    """
     import_info = DataReleaseImportInfo(export_directory)
     with TemporaryDirectory() as butler_repo:
+        # Construct a Butler configuration that has a chained datastore with a
+        # root for each DP2 storage location, and the database configuration
+        # given on the command line.
         config = Config()
         config["registry", "db"] = database_uri
-        if schema is not None:
-            config["registry", "namespace"] = schema
+        config["registry", "namespace"] = schema
+        config["datastore"] = generate_dp2_datastore_config()
 
-        config["datastore", "cls"] = "lsst.daf.butler.datastores.chainedDatastore.ChainedDatastore"
-        datastores = set(DP2_DATASTORE_MAP.values())
-        config["datastore", "datastores"] = [
-            _generate_datastore_config(datastore_name) for datastore_name in datastores
-        ]
-
+        # Create a temporary Butler repo to connect us to the database during
+        # the import process.
         repo_config = Butler.makeRepo(butler_repo, config, dimensionConfig=import_info.get_dimension_config())
         repo_config.dumpToUri("dp2-butler-config.yaml")
 
-        asyncio.run(import_data_release(butler_repo, import_info, _map_files_to_dp2_datastores))
-
-
-def _generate_datastore_config(datastore_name: str) -> dict:
-    return {
-        "datastore": {
-            "cls": "lsst.daf.butler.datastores.fileDatastore.FileDatastore",
-            "name": datastore_name,
-            "records": {"table": f"{datastore_name}_datastore_records"},
-        }
-    }
-
-
-def _map_files_to_dp2_datastores(table: DatastoreRecordTable) -> DatastoreRecordTable:
-    """Convert the absolute paths in the datastore dump to relative paths,
-    splitting the datasets up among multiple Butler datastores.  Each of these
-    datastores corresponds to an S3 bucket that will serve the files to end
-    users.
-    """
-    return map_absolute_uris_to_datastores(table, DP2_DATASTORE_MAP)
+        dataset_types = DP2_MINI_SUBSET if mini else None
+        asyncio.run(
+            import_data_release(
+                butler_repo,
+                import_info,
+                dataset_types=dataset_types,
+                datastore_transform_function=map_files_to_dp2_datastores,
+            )
+        )
 
 
 if __name__ == "__main__":
