@@ -22,29 +22,28 @@ from .import_dimension_records import DimensionRecordImportProgress
 class DataReleaseImportProgressDisplay:
     def __init__(self, dataset_type_count: int) -> None:
         self._top_level = Tree("Import data release")
+        self._dataset_type_count = dataset_type_count
 
-        self._dataset_type_progress = IndeterminateProgressDisplay("Dataset type import")
+        self._dataset_type_progress = IndeterminateProgressDisplay("Dataset types")
         self._top_level.add(self._dataset_type_progress.get_renderable())
 
         self._dimension_progress = NestedProgressDisplay(
-            "Dimension record import", self._progress_columns(), self._progress_columns()
+            "Dimension records", self._progress_columns(), self._progress_columns()
         )
         self._top_level.add(self._dimension_progress.get_renderable())
 
-        self._collection_progress = IndeterminateProgressDisplay("Collection import")
+        self._collection_progress = IndeterminateProgressDisplay("Collections")
         self._top_level.add(self._collection_progress.get_renderable())
 
-        self._dataset_progress = NestedProgressDisplay(
-            "Dataset import", self._progress_columns(), self._progress_columns()
-        )
-        self._dataset_progress.update_parent(total=dataset_type_count, completed=0)
-        self._top_level.add(self._dataset_progress.get_renderable())
+        self._dataset_progress = self._add_dataset_progress_bar("Datasets")
+        self._datastore_progress = self._add_dataset_progress_bar("Datastore records")
+        self._association_progress = self._add_dataset_progress_bar("Dataset associations")
 
-        self._datastore_progress = NestedProgressDisplay(
-            "Datastore record import", self._progress_columns(), self._progress_columns()
-        )
-        self._datastore_progress.update_parent(total=dataset_type_count, completed=0)
-        self._top_level.add(self._datastore_progress.get_renderable())
+    def _add_dataset_progress_bar(self, label: str) -> NestedProgressDisplay:
+        progress = NestedProgressDisplay(label, self._progress_columns(), self._progress_columns())
+        progress.update_parent(total=self._dataset_type_count, completed=0)
+        self._top_level.add(progress.get_renderable())
+        return progress
 
     def _progress_columns(self) -> list[ProgressColumn]:
         return [
@@ -80,6 +79,9 @@ class DataReleaseImportProgressDisplay:
 
     def handle_datastore_import_event(self, event: DatasetImportEvent) -> None:
         self._handle_event(self._datastore_progress, event)
+
+    def handle_association_import_event(self, event: DatasetImportEvent) -> None:
+        self._handle_event(self._association_progress, event)
 
     def _handle_event(self, progress: NestedProgressDisplay, event: DatasetImportEvent) -> None:
         match event.event:
