@@ -57,7 +57,7 @@ async def export_data_release(
         Destination directory for parquet files containing export data.
     dataset_types
         List of dataset type names that will be exported.
-    dataset_types
+    provenance_dataset_types
         List of provenance dataset type names (e.g. "run_provenance") that will
         be exported.
     collections
