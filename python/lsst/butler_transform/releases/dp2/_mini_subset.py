@@ -29,7 +29,7 @@ from __future__ import annotations
 
 DP2_MINI_SUBSET = (
     "deep_coadd",
-    "run_provenance",
+    "deep_coadd_input_summary",
     # QServ catalogs
     "object",
     "isolated_star_stellar_motions",

@@ -70,7 +70,7 @@ async def read_dataset_ids(input_file: str | Path) -> AsyncIterator[list[Dataset
     column_name = "dataset_id"
     async with AsyncParquetReader.create(input_file) as reader:
         async for batch in reader.iter_batches(batch_size=50000, columns=[column_name]):
-            yield [_convert_parquet_uuid_to_dataset_id(id.as_py()) for id in batch.column(column_name)]
+            yield [id.as_py() for id in batch.column(column_name)]
 
 
 class DatasetRefTable:
@@ -90,7 +90,7 @@ class DatasetRefTable:
                 self.dataset_type,
                 row,
                 row["run"],
-                id=_convert_parquet_uuid_to_dataset_id(row["dataset_id"]),
+                id=row["dataset_id"],
             )
             for row in self.table.to_pylist()
         ]
@@ -193,7 +193,7 @@ class DatasetAssociationParquetReader(TableReaderBase[DatasetAssociationTable]):
 @cache
 def _create_dataset_arrow_schema(dimensions: DimensionGroup) -> pyarrow.Schema:
     fields = [
-        pyarrow.field("dataset_id", pyarrow.binary(16), nullable=False),
+        pyarrow.field("dataset_id", pyarrow.uuid(), nullable=False),
         pyarrow.field("run", pyarrow.dictionary(pyarrow.int32(), pyarrow.string()), nullable=False),
         *_get_data_id_column_schemas(dimensions),
     ]
@@ -222,13 +222,6 @@ def _get_data_id_column_schemas(dimensions: DimensionGroup) -> list[pyarrow.Fiel
         schema.append(field)
 
     return schema
-
-
-def _convert_parquet_uuid_to_dataset_id(dataset_id_binary: object) -> DatasetId:
-    assert isinstance(dataset_id_binary, bytes), (
-        f"Dataset ID expected to be serialized as binary bytes, got {type(dataset_id_binary)}"
-    )
-    return DatasetId(bytes=dataset_id_binary)
 
 
 def _convert_timespan_to_dict(value: Timespan | None) -> dict[str, int] | None:

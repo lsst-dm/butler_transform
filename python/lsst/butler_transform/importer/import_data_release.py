@@ -41,6 +41,7 @@ from lsst.butler_transform.importer.import_dimension_records import (
 from lsst.daf.butler import Butler, Config, DatasetType, DimensionConfig, DimensionElement, DimensionUniverse
 
 from ..export.export_data_release import DataReleaseExportManifest
+from ..export.export_datasets import DatasetExportManifest
 from ..utils.butler_pool import ButlerPool
 from ..utils.butler_process_pool import ButlerProcessPool
 from ._progress import DataReleaseImportProgressDisplay
@@ -57,8 +58,8 @@ class DataReleaseImportInfo:
 
     def __init__(self, export_directory: str | Path) -> None:
         self._directory = Path(export_directory).resolve()
-        manifest_path = self._get_absolute_path("manifest.json")
-        self.manifest = DataReleaseExportManifest.model_validate_json(manifest_path.read_text())
+        self.manifest_path = self._get_absolute_path("manifest.json")
+        self.manifest = DataReleaseExportManifest.model_validate_json(self.manifest_path.read_text())
         self.universe = DimensionUniverse(self.get_dimension_config())
 
     def get_dimension_config(self) -> DimensionConfig:
@@ -72,9 +73,12 @@ class DataReleaseImportInfo:
         dimension.
         """
         return {
-            self.universe[k]: self._get_absolute_path(v)
-            for k, v in self.manifest.dimension_record_files.items()
+            self.universe[dimension]: self.get_dimension_record_input(dimension)
+            for dimension in self.manifest.dimension_record_files.keys()
         }
+
+    def get_dimension_record_input(self, dimension_name: str) -> Path:
+        return self._get_absolute_path(self.manifest.dimension_record_files[dimension_name])
 
     def get_collection_input(self) -> Path:
         """Return the absolute path to the parquet file containing collection
@@ -84,15 +88,7 @@ class DataReleaseImportInfo:
 
     def get_dataset_inputs(self, subset: Iterable[str] | None = None) -> list[DatasetImportInfo]:
         """Return information about each dataset type included in the export."""
-        import_info = [
-            DatasetImportInfo(
-                dataset_type=DatasetType.from_simple(ds.dataset_type, self.universe),
-                dataset_export_file=self._get_absolute_path(ds.dataset_export_file),
-                datastore_export_file=self._get_absolute_path(ds.datastore_export_file),
-                association_export_file=self._get_absolute_path(ds.association_export_file),
-            )
-            for ds in self.manifest.datasets
-        ]
+        import_info = [self._convert_dataset_manifest(ds) for ds in self.manifest.datasets]
 
         if subset is None:
             return import_info
@@ -106,6 +102,21 @@ class DataReleaseImportInfo:
             found_dataset_types.update(matches)
 
         return [info for info in import_info if info.dataset_type.name in found_dataset_types]
+
+    def get_dataset_input(self, dataset_type_name: str) -> DatasetImportInfo:
+        for manifest in self.manifest.datasets:
+            if manifest.dataset_type.name == dataset_type_name:
+                return self._convert_dataset_manifest(manifest)
+
+        raise KeyError(f"Dataset type name '{dataset_type_name}' not present in export dump.")
+
+    def _convert_dataset_manifest(self, manifest: DatasetExportManifest) -> DatasetImportInfo:
+        return DatasetImportInfo(
+            dataset_type=DatasetType.from_simple(manifest.dataset_type, self.universe),
+            dataset_export_file=self._get_absolute_path(manifest.dataset_export_file),
+            datastore_export_file=self._get_absolute_path(manifest.datastore_export_file),
+            association_export_file=self._get_absolute_path(manifest.association_export_file),
+        )
 
     def _get_absolute_path(self, suffix: str) -> Path:
         path = self._directory.joinpath(suffix).resolve()
@@ -151,7 +162,7 @@ async def import_data_release(
                 tg.start_soon(
                     DimensionRecordImporter(
                         butler_pool,
-                        import_info.get_dimension_record_inputs(),
+                        dimension_inputs,
                         dimension_tracker,
                         progress.update_dimension_record_progress,
                     ).import_
