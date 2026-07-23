@@ -53,6 +53,10 @@ class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
         butler.collections.register("runs/def")
         butler.collections.register("tag", CollectionType.TAGGED, doc="this is a collection")
         butler.collections.register("calib", CollectionType.CALIBRATION)
+        butler.collections.register("top_level_chain", CollectionType.CHAINED)
+        butler.collections.register("nested_chain", CollectionType.CHAINED)
+        butler.collections.redefine_chain("top_level_chain", ["runs/abc", "nested_chain"])
+        butler.collections.redefine_chain("nested_chain", ["tag", "calib"])
         dt1 = DatasetType("dt1", ["instrument", "visit"], "int", universe=butler.dimensions)
         dt2 = DatasetType("dt2", ["instrument", "detector"], "int", universe=butler.dimensions)
         dt3 = DatasetType("dt3", ["instrument", "detector"], "int", universe=butler.dimensions)
@@ -98,7 +102,7 @@ class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
                     tmpdir_path,
                     ["dt1", "d*2", "dt3", "dt4"],
                     ["run_provenance"],
-                    ["runs/abc", "tag", "calib"],
+                    ["top_level_chain"],
                 )
 
             dt1_datasets = read_table(tmpdir_path.joinpath("dt1.datasets.parquet")).to_pylist()
@@ -206,26 +210,34 @@ class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
             # Check export of collections.
             collection_table = read_table(tmpdir_path.joinpath("collections.parquet")).to_pylist()
             collection_table.sort(key=lambda c: c["name"])
-            self.assertEqual(len(collection_table), 4)
+            self.assertEqual(len(collection_table), 6)
             self.assertEqual(collection_table[0]["name"], "calib")
             self.assertEqual(collection_table[0]["type"], 4)
             self.assertEqual(collection_table[0]["doc"], "")
             self.assertEqual(collection_table[0]["children"], [])
-            self.assertEqual(collection_table[1]["name"], "runs/abc")
-            self.assertEqual(collection_table[1]["type"], 1)
+            self.assertEqual(collection_table[1]["name"], "nested_chain")
+            self.assertEqual(collection_table[1]["type"], 3)
             self.assertEqual(collection_table[1]["doc"], "")
-            self.assertEqual(collection_table[1]["children"], [])
-            # runs/def was not given in the list of input collections, but it
-            # should have been pulled in because one of the datasets in the
-            # input tagged collection references it.
-            self.assertEqual(collection_table[2]["name"], "runs/def")
+            self.assertEqual(collection_table[1]["children"], ["tag", "calib"])
+            self.assertEqual(collection_table[2]["name"], "runs/abc")
             self.assertEqual(collection_table[2]["type"], 1)
             self.assertEqual(collection_table[2]["doc"], "")
             self.assertEqual(collection_table[2]["children"], [])
-            self.assertEqual(collection_table[3]["name"], "tag")
-            self.assertEqual(collection_table[3]["type"], 2)
-            self.assertEqual(collection_table[3]["doc"], "this is a collection")
+            # runs/def was not given in the list of input collections, but it
+            # should have been pulled in because one of the datasets in the
+            # input tagged collection references it.
+            self.assertEqual(collection_table[3]["name"], "runs/def")
+            self.assertEqual(collection_table[3]["type"], 1)
+            self.assertEqual(collection_table[3]["doc"], "")
             self.assertEqual(collection_table[3]["children"], [])
+            self.assertEqual(collection_table[4]["name"], "tag")
+            self.assertEqual(collection_table[4]["type"], 2)
+            self.assertEqual(collection_table[4]["doc"], "this is a collection")
+            self.assertEqual(collection_table[4]["children"], [])
+            self.assertEqual(collection_table[5]["name"], "top_level_chain")
+            self.assertEqual(collection_table[5]["type"], 3)
+            self.assertEqual(collection_table[5]["doc"], "")
+            self.assertEqual(collection_table[5]["children"], ["runs/abc", "nested_chain"])
 
             # Check export of dataset associations
             dt1_associations = read_table(tmpdir_path.joinpath("dt1.association.parquet")).to_pylist()
@@ -290,6 +302,14 @@ class TestDatasetExport(unittest.IsolatedAsyncioTestCase):
                         DatasetAssociation(ref6, "calib", second_certification_timespan),
                         DatasetAssociation(ref5, "calib", certification_timespan),
                     ],
+                )
+                # Check import of chained collections
+                self.assertEqual(
+                    import_butler.collections.get_info("top_level_chain").children,
+                    ("runs/abc", "nested_chain"),
+                )
+                self.assertEqual(
+                    import_butler.collections.get_info("nested_chain").children, ("tag", "calib")
                 )
 
                 # The export process implicitly converts URIs to absolute
