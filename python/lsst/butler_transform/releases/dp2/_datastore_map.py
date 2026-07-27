@@ -27,9 +27,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import Literal
+
 from lsst.daf.butler._rubin.datastore_records import DatastoreRecordTable
 
-from ...transform.rewrite_datastore_paths import map_absolute_uris_to_datastores
+from ...importer.import_datasets import DatastoreTransformFunction
+from ...transform.rewrite_datastore_paths import (
+    DatastoreNameAndPath,
+    map_absolute_uris_to_datastores,
+    rewrite_datastore_and_path,
+)
 
 DP2_DATASTORE_MAP = {
     "file:///sdf/group/rubin/repo/dp2_prep": "dp2",
@@ -45,7 +54,27 @@ buckets used to serve them.
 """
 
 
-def generate_dp2_datastore_config() -> dict:
+@dataclass(frozen=True)
+class DatastoreSetup:
+    datastore_config: dict
+    datastore_transform_function: DatastoreTransformFunction
+
+
+def get_datastore_setup(file_map: Literal["rsp", "usdf"]) -> DatastoreSetup:
+    if file_map == "rsp":
+        return DatastoreSetup(
+            datastore_config=generate_rsp_datastore_config(),
+            datastore_transform_function=map_table_to_rsp_datastores,
+        )
+    elif file_map == "usdf":
+        return DatastoreSetup(
+            datastore_config=generate_usdf_datastore_config(), datastore_transform_function=map_table_for_usdf
+        )
+
+    raise AssertionError(f"Unknown file mapping {file_map}")
+
+
+def generate_rsp_datastore_config() -> dict:
     """Generate a Butler datastore configuration to use for DP2 on the Google
     RSP.  The generated configuration is a ChainedDatastore with one child
     datastore for each storage root that will be mapped to an S3 bucket.
@@ -67,10 +96,44 @@ def _generate_file_datastore_config(datastore_name: str) -> dict:
     }
 
 
-def map_files_to_dp2_datastores(table: DatastoreRecordTable) -> DatastoreRecordTable:
+def map_table_to_rsp_datastores(table: DatastoreRecordTable) -> DatastoreRecordTable:
     """Convert the absolute paths in the datastore dump to relative paths,
     splitting the datasets up among multiple Butler datastores.  Each of these
     datastores corresponds to an S3 bucket that will serve the files to end
     users.
+
+    This is the configuration used by the Google Rubin Science Platform for
+    end-users.
     """
     return map_absolute_uris_to_datastores(table, DP2_DATASTORE_MAP)
+
+
+USDF_DATASTORE_NAME = "dp2"
+
+
+def generate_usdf_datastore_config() -> dict:
+    return _generate_file_datastore_config(USDF_DATASTORE_NAME)
+
+
+def map_table_for_usdf(table: DatastoreRecordTable) -> DatastoreRecordTable:
+    """
+    Modify the datastore dump to assign all files to a single datastore
+    matching the default Butler datastore configuration.  Paths are left
+    as absolute URIs. This has the same effect as if the datasets had been
+    ingested using the Butler "direct" mode, referencing them from their
+    current location in the file system.
+
+    This configuration could be used to set up a DP2 Butler at USDF matching
+    the one deployed at the Google RSP.
+    """
+    return rewrite_datastore_and_path(table, _map_files_for_usdf)
+
+
+def _map_files_for_usdf(rows: Sequence[DatastoreNameAndPath]) -> None:
+    for row in rows:
+        # Remap all datasets into a single datastore.
+        row["datastore_name"] = USDF_DATASTORE_NAME
+
+        # The paths are absolute URIs to the files at USDF.  If you needed to
+        # modify these, you could do something like:
+        # row["path"] = row["path"].replace("file:///sdf/group/rubin/repo/dp2_prep", "file:///something_else")
