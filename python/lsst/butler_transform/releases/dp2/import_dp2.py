@@ -26,6 +26,8 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>
 
 import asyncio
+import shutil
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Literal
 
@@ -78,8 +80,8 @@ def import_dp2(
 
         # Create a temporary Butler repo to connect us to the database during
         # the import process.
-        repo_config = Butler.makeRepo(butler_repo, config, dimensionConfig=import_info.get_dimension_config())
-        repo_config.dumpToUri("dp2-butler-config.yaml")
+        Butler.makeRepo(butler_repo, config, dimensionConfig=import_info.get_dimension_config())
+        shutil.copy(Path(butler_repo) / "butler.yaml", "dp2-butler-config.yaml")
 
         dataset_types = DP2_MINI_SUBSET if mini else None
         asyncio.run(
