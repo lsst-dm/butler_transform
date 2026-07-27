@@ -52,13 +52,18 @@ def generate_file_lists(input_directory: str, output_directory: str) -> None:
     import_info = DataReleaseImportInfo(input_directory)
     output_path = Path(output_directory)
     output_path.mkdir(parents=True, exist_ok=True)
+    dataset_id_dir = output_path / "dataset_ids"
+    dataset_id_dir.mkdir()
+    file_list_dir = output_path / "files"
+    file_list_dir.mkdir()
 
     dataset_info = import_info.get_dataset_inputs(subset=DP2_MINI_SUBSET)
 
     for dt in dataset_info:
         print(f"Exporting {dt.dataset_type.name}")
-        _write_dataset_ids(dt, output_path / f"{dt.dataset_type.name}.dataset_ids.txt")
-        _write_filenames(dt, output_path / f"{dt.dataset_type.name}.files.txt")
+        filename = f"{dt.dataset_type.name}.txt"
+        _write_dataset_ids(dt, dataset_id_dir / filename)
+        _write_filenames(dt, file_list_dir / filename)
 
 
 def _write_dataset_ids(dataset_info: DatasetImportInfo, output_file: Path) -> None:
