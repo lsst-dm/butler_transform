@@ -26,6 +26,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 from collections.abc import Iterator, Sequence
+from pathlib import Path
 
 from duckdb import DuckDBPyRelation
 
@@ -33,7 +34,7 @@ from ..utils.duckdb import fetch_batches_of_scalars, initialize_duckdb_connectio
 
 
 def get_file_list_from_datastore_export(
-    datastore_export_files: Sequence[str], batch_size=100_000
+    datastore_export_files: Sequence[str | Path], batch_size=100_000
 ) -> Iterator[Sequence[str]]:
     """Retrieve the list of URIs to artifact files represented by a given set
     of datastore records.  The list is de-duplicated and paths have URI
@@ -55,7 +56,8 @@ def get_file_list_from_datastore_export(
     """
     with initialize_duckdb_connection() as conn:
         yield from fetch_batches_of_scalars(
-            get_file_list_relation(conn.from_parquet(datastore_export_files)), batch_size=batch_size
+            get_file_list_relation(conn.from_parquet([str(f) for f in datastore_export_files])),
+            batch_size=batch_size,
         )
 
 
