@@ -60,7 +60,7 @@ class DatastoreSetup:
     datastore_transform_function: DatastoreTransformFunction
 
 
-def get_datastore_setup(file_map: Literal["rsp", "usdf"]) -> DatastoreSetup:
+def get_datastore_setup(file_map: Literal["rsp", "usdf", "frdf"]) -> DatastoreSetup:
     if file_map == "rsp":
         return DatastoreSetup(
             datastore_config=generate_rsp_datastore_config(),
@@ -69,6 +69,10 @@ def get_datastore_setup(file_map: Literal["rsp", "usdf"]) -> DatastoreSetup:
     elif file_map == "usdf":
         return DatastoreSetup(
             datastore_config=generate_usdf_datastore_config(), datastore_transform_function=map_table_for_usdf
+        )
+    elif file_map == "frdf":
+        return DatastoreSetup(
+            datastore_config=generate_frdf_datastore_config(), datastore_transform_function=map_table_for_frdf
         )
 
     raise AssertionError(f"Unknown file mapping {file_map}")
@@ -137,3 +141,67 @@ def _map_files_for_usdf(rows: Sequence[DatastoreNameAndPath]) -> None:
         # The paths are absolute URIs to the files at USDF.  If you needed to
         # modify these, you could do something like:
         # row["path"] = row["path"].replace("file:///sdf/group/rubin/repo/dp2_prep", "file:///something_else")
+
+
+FRDF_DATASTORE_NAME = "dp2"
+
+
+def generate_frdf_datastore_config() -> dict:
+    return _generate_file_datastore_config(FRDF_DATASTORE_NAME)
+
+
+def map_table_for_frdf(table: DatastoreRecordTable) -> DatastoreRecordTable:
+    """
+    Modify the datastore dump to assign all files to a single datastore
+    matching the default Butler datastore configuration.  Paths are left
+    as absolute URIs. This has the same effect as if the datasets had been
+    ingested using the Butler "direct" mode, referencing them from their
+    current location in the file system.
+
+    This configuration could be used to set up a DP2 Butler at USDF matching
+    the one deployed at the Google RSP.
+    """
+    return rewrite_datastore_and_path(table, _map_files_for_frdf)
+
+
+def _map_files_for_frdf(rows: Sequence[DatastoreNameAndPath]) -> None:
+    for row in rows:
+        # Remap all datasets into a single datastore.
+        row["datastore_name"] = FRDF_DATASTORE_NAME
+
+        # We remap all paths to their absolute URI under the
+        # `.../releases/dp2` directory at FrDF. This is the equivalent of
+        # ingesting all butler datasets in direct mode.
+        path = row["path"]
+        if path.startswith("file:///sdf/group/rubin/repo/dp2_prep"):
+            # `dp2` category
+            row["path"] = path.replace(
+                "file:///sdf/group/rubin/repo/dp2_prep",
+                "davs://ccdavrubinint.in2p3.fr:5443/pnfs/in2p3.fr/lsst/releases/dp2",
+                1,
+            )
+        elif path.startswith(
+            "file:///sdf/data/rubin/rses/lsst/butlerdisk/rucio/repo/ancillary/LSSTCam/calib"
+        ):
+            # `calib` category
+            row["path"] = path.replace(
+                "file:///sdf/data/rubin/rses/lsst/butlerdisk/rucio/repo/ancillary/LSSTCam/calib",
+                "davs://ccdavrubinint.in2p3.fr:5443/pnfs/in2p3.fr/lsst/releases/ancillary/calib",
+                1,
+            )
+        elif path.startswith("file:///sdf/data/rubin/shared/refcats"):
+            # `refcats` category
+            row["path"] = path.replace(
+                "file:///sdf/data/rubin/shared/refcats",
+                "davs://ccdavrubinint.in2p3.fr:5443/pnfs/in2p3.fr/lsst/releases/raw/refcats",
+                1,
+            )
+        elif path.startswith("file:///sdf/data/rubin/lsstdata/offline/instrument/LSSTCam"):
+            # `raw` category
+            row["path"] = path.replace(
+                "file:///sdf/data/rubin/lsstdata/offline/instrument/LSSTCam",
+                "davs://ccdavrubinint.in2p3.fr:5443/pnfs/in2p3.fr/lsst/instrument/raw/LSSTCam",
+                1,
+            )
+        else:
+            raise ValueError(f"path starting with an unexpected prefix {path}")
