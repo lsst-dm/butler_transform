@@ -48,7 +48,7 @@ from .export import TOP_LEVEL_COLLECTION
 @click.option("--mini", is_flag=True, help="Set up the 'early' DP2 release instead of the 'full' release")
 @click.option(
     "--file-map",
-    type=click.Choice(["rsp", "usdf"]),
+    type=click.Choice(["rsp", "usdf", "frdf"]),
     default="rsp",
     help="Specify how file paths will be mapped in the target Butler.",
 )
