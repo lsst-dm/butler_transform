@@ -77,9 +77,21 @@ type DatasetImportEvent = DatasetImportStartedEvent | DatasetImportProgressEvent
 
 type DatasetImportEventCallback = Callable[[DatasetImportEvent], None]
 
-type DatastoreTransformFunction = Callable[[DatastoreRecordTable], DatastoreRecordTable]
+type DatastoreTransformFunction = Callable[[str, DatastoreRecordTable], DatastoreRecordTable]
 """Function that will be called to modify each batch of datastore records
 before importing them to the Butler.
+
+Parameters
+----------
+dataset_type
+    Name of the dataset type for the datastore records.
+table
+    Arrow table of datastore record data.
+
+Returns
+-------
+table
+    Modified datastore records table.
 """
 
 
@@ -108,7 +120,9 @@ class DatasetImporter:
         transform_function: DatastoreTransformFunction | None = None,
     ) -> None:
         """Import datastore records from the given parquet file."""
-        import_func = partial(_import_datastore, transform_function=transform_function)
+        import_func = partial(
+            _import_datastore, transform_function=transform_function, dataset_type=self._dataset_type.name
+        )
         async with DatastoreParquetReader(input_file) as reader:
             await self._do_import(reader, event_callback, import_func)
 
@@ -179,10 +193,13 @@ def _import_datasets(butler: Butler, table: DatasetRefTable):
 
 
 def _import_datastore(
-    butler: Butler, table: DatastoreRecordTable, transform_function: DatastoreTransformFunction | None
+    butler: Butler,
+    table: DatastoreRecordTable,
+    transform_function: DatastoreTransformFunction | None,
+    dataset_type: str,
 ) -> None:
     if transform_function is not None:
-        table = transform_function(table)
+        table = transform_function(dataset_type, table)
     import_datastore_records_table(butler, table)
 
 
