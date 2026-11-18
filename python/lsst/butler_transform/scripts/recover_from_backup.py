@@ -55,23 +55,17 @@ class BackupRecovery(AsyncContextManagerMixin):
         target_output_path = output_path / "target"
         target_output_path.mkdir(exist_ok=True, parents=True)
         async with asyncio.TaskGroup() as tg:
-            backup_task = tg.create_task(
+            tg.create_task(
                 self._export_collection(self._backup_butler, dataset_types, collection, backup_output_path)
             )
-            target_task = tg.create_task(
+            tg.create_task(
                 self._export_collection(self._target_butler, dataset_types, collection, target_output_path)
             )
 
-        manifest = BackupExportManifest(
-            backup_datasets=backup_task.result(), target_datasets=target_task.result()
-        )
-        async with await open_file(output_path.joinpath("manifest.json"), "wb") as fh:
-            await fh.write(manifest.model_dump_json(indent=2).encode("utf-8"))
-
     async def _export_collection(
-        self, butler_pool: ButlerProcessPool, dataset_types: Iterable[str], collection: str, output_path
+        self, butler_pool: ButlerProcessPool, dataset_types: Iterable[str], collection: str, output_path: Path
     ):
-        return await DatasetExporter(
+        result = await DatasetExporter(
             butler_pool,
             self._duckdb_pool,
             output_directory=output_path,
@@ -79,6 +73,10 @@ class BackupRecovery(AsyncContextManagerMixin):
             include_associations=False,
             find_first=False,
         ).export(dataset_types, [], [collection])
+
+        manifest = BackupExportManifest(datasets=result.manifests)
+        async with await open_file(output_path.joinpath("manifest.json"), "wb") as fh:
+            await fh.write(manifest.model_dump_json(indent=2).encode("utf-8"))
 
 
 def _get_dataset_types(butler: Butler, collection: str) -> frozenset[str]:
@@ -88,8 +86,7 @@ def _get_dataset_types(butler: Butler, collection: str) -> frozenset[str]:
 
 
 class BackupExportManifest(BaseModel):
-    backup_datasets: list[DatasetExportManifest]
-    target_datasets: list[DatasetExportManifest]
+    datasets: list[DatasetExportManifest]
 
 
 if __name__ == "__main__":
