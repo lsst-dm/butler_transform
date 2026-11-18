@@ -90,3 +90,7 @@ def _get_dataset_types(butler: Butler, collection: str) -> frozenset[str]:
 class BackupExportManifest(BaseModel):
     backup_datasets: list[DatasetExportManifest]
     target_datasets: list[DatasetExportManifest]
+
+
+if __name__ == "__main__":
+    find_missing_datasets()
