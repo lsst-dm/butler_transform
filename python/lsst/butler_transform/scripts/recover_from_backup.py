@@ -51,9 +51,9 @@ class BackupRecovery(AsyncContextManagerMixin):
     async def export_dataset_lists(self, collection: str, output_path: Path) -> None:
         dataset_types = await self._target_butler.run_with_butler(_get_dataset_types, collection)
         backup_output_path = output_path / "backup"
-        backup_output_path.mkdir(exist_ok=True)
+        backup_output_path.mkdir(exist_ok=True, parents=True)
         target_output_path = output_path / "target"
-        target_output_path.mkdir(exist_ok=True)
+        target_output_path.mkdir(exist_ok=True, parents=True)
         async with asyncio.TaskGroup() as tg:
             backup_task = tg.create_task(
                 self._export_collection(self._backup_butler, dataset_types, collection, backup_output_path)
