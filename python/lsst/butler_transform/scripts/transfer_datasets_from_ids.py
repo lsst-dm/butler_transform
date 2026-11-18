@@ -20,7 +20,7 @@ def do_transfer(backup_repo: str, target_repo: str, dataset_file: str):
 
         async def xfer():
             async for ids in read_dataset_ids(dataset_file):
-                refs = target_butler.get_many_datasets(ids)
+                refs = backup_butler.get_many_datasets(ids)
                 if len(refs) != len(ids):
                     raise RuntimeError("Datasets are missing from source repository")
                 transfer_datasets_in_place(backup_butler, target_butler, refs)
