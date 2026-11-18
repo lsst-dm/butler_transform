@@ -27,10 +27,8 @@ def clear_from_trash(target_repo: str, dataset_file: str):
                         record_class=StoredFileInfo,
                         record_column="path",
                         selected_ids=ids,
-                        dry_run=True,
                     ) as trash_data:
-                        print(trash_data)
-                        raise
+                        print(len(trash_data))
 
         asyncio.run(doEmpty())
 
