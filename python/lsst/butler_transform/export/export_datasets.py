@@ -44,7 +44,6 @@ from lsst.daf.butler import (
     CollectionType,
     DatasetAssociation,
     DatasetType,
-    SerializedDatasetType,
 )
 
 from ..parquet.datasets import DatasetAssociationParquetWriter, DatasetRefTable, DatasetsParquetWriter
@@ -243,7 +242,7 @@ class DatasetExportResult:
 class DatasetExportManifest(BaseModel):
     """Manifest for a single dataset type in the data release export."""
 
-    dataset_type: SerializedDatasetType
+    dataset_type: str
     """Dataset type definition."""
     dataset_export_file: str
     """Path to parquet file containing the exported
