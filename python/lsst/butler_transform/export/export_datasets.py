@@ -67,7 +67,13 @@ class DatasetExporter:
     """
 
     def __init__(
-        self, butler_pool: ButlerPool, duckdb_pool: DuckDbPool, output_directory: Path | str
+        self,
+        butler_pool: ButlerPool,
+        duckdb_pool: DuckDbPool,
+        output_directory: Path | str,
+        include_datastore: bool = True,
+        include_associations: bool = True,
+        find_first: bool = True,
     ) -> None:
         self._butler_pool = butler_pool
         self._duckdb_pool = duckdb_pool
@@ -76,6 +82,9 @@ class DatasetExporter:
         # number of exports running simultaneously.
         self._limiter = CapacityLimiter(butler_pool.max_connections)
         self._datastore_exporter = DatastoreExporter(self._butler_pool)
+        self._include_datastore = include_datastore
+        self._include_associations = include_associations
+        self._find_first = find_first
 
     async def export(
         self,
@@ -119,7 +128,7 @@ class DatasetExporter:
                 # collection chain.  For calibration dataset types, there will
                 # be multiple versions associated with different certification
                 # timespans, and we need to fetch all of them.
-                find_first = not dt.isCalibration()
+                find_first = self._find_first and not dt.isCalibration()
                 await tg.start(
                     self._export_single_dataset_type, context, dt, resolved_collections, find_first
                 )
@@ -185,18 +194,20 @@ class DatasetExporter:
             context.add_found_run_collections(run_collections_found)
 
             async with create_task_group() as tg:
-                tg.start_soon(
-                    self._datastore_exporter.export_from_dataset_parquet,
-                    dataset_parquet_path,
-                    self._output_directory.joinpath(manifest.datastore_export_file),
-                )
-                tg.start_soon(
-                    self._export_associations,
-                    association_collections,
-                    dataset_type,
-                    dataset_parquet_path,
-                    self._output_directory.joinpath(manifest.association_export_file),
-                )
+                if self._include_datastore:
+                    tg.start_soon(
+                        self._datastore_exporter.export_from_dataset_parquet,
+                        dataset_parquet_path,
+                        self._output_directory.joinpath(manifest.datastore_export_file),
+                    )
+                if self._include_associations:
+                    tg.start_soon(
+                        self._export_associations,
+                        association_collections,
+                        dataset_type,
+                        dataset_parquet_path,
+                        self._output_directory.joinpath(manifest.association_export_file),
+                    )
         print(f"{dataset_type.name}: complete")
 
     async def _export_associations(
