@@ -27,6 +27,8 @@
 
 from __future__ import annotations
 
+import fnmatch
+
 DP2_MINI_SUBSET = (
     "deep_coadd",
     "deep_coadd_input_summary",
@@ -55,3 +57,7 @@ DP2_MINI_SUBSET = (
 """The portion of DP2 that will be hosted on Google Cloud Storage and released
 ahead of other dataset types.
 """
+
+
+def is_in_dp2_mini_subset(dataset_type: str) -> bool:
+    return any(fnmatch.fnmatch(dataset_type, glob) for glob in DP2_MINI_SUBSET)

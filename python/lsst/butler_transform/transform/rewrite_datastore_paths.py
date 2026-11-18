@@ -50,6 +50,9 @@ class AbsolutePathMapper:
         to convert relative URIs in the datastore records to absolute URIs.
         Provided automatically if you call ``AbsolutePathMapper.from_butler``
         to instantiate this class.
+    output_datastore_name, optional
+        Datastore name to be assigned to all rows in the output.  If not
+        provided, the original datastore name is kept.
 
     Notes
     -----
@@ -60,8 +63,11 @@ class AbsolutePathMapper:
     downstream by making everything absolute.
     """
 
-    def __init__(self, input_datastore_roots: dict[str, str]) -> None:
+    def __init__(
+        self, input_datastore_roots: dict[str, str], output_datastore_name: str | None = None
+    ) -> None:
         self._input_datastore_roots = input_datastore_roots
+        self._output_datastore_name = output_datastore_name
 
     @staticmethod
     def from_butler(butler: Butler) -> AbsolutePathMapper:
@@ -79,18 +85,17 @@ class AbsolutePathMapper:
     def make_paths_absolute(self, table: DatastoreRecordTable) -> DatastoreRecordTable:
         """Return a copy of the given ``DatastoreRecordTable`` with all
         relative paths converted to absolute paths.
+
+
         """
         return rewrite_datastore_and_path(table, self._remap_rows)
 
     def _remap_rows(self, rows: Sequence[DatastoreNameAndPath]) -> None:
         _make_uris_absolute(rows, self._input_datastore_roots)
-
-        """
-        output_prefix_datastore_mapping
-            Mapping from absolute URI prefix to datastore name (e.g.
-            ``{ "file://some_root/": "datastore_name" }``, used to assign paths
-            to datastores and convert them to relative paths.
-        """
+        datastore_name = self._output_datastore_name
+        if datastore_name is not None:
+            for row in rows:
+                row["datastore_name"] = datastore_name
 
 
 class DatastoreNameAndPath(TypedDict):

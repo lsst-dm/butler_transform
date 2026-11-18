@@ -35,10 +35,12 @@ from lsst.daf.butler._rubin.datastore_records import DatastoreRecordTable
 
 from ...importer.import_datasets import DatastoreTransformFunction
 from ...transform.rewrite_datastore_paths import (
+    AbsolutePathMapper,
     DatastoreNameAndPath,
     map_absolute_uris_to_datastores,
     rewrite_datastore_and_path,
 )
+from ._mini_subset import is_in_dp2_mini_subset
 
 DP2_DATASTORE_MAP = {
     "file:///sdf/group/rubin/repo/dp2_prep": "dp2",
@@ -51,6 +53,29 @@ DP2_DATASTORE_MAP = {
 Storage locations used by the `dp2_prep` Butler repository at USDF, as a
 mapping from physical paths to virtual "datastore" names corresponding to S3
 buckets used to serve them.
+"""
+
+RSP_USDF_S3_DATASTORE_PATHS = {
+    "dp2": "s3://slac@rubin-dp2/",
+    "calib": "s3://slac@rubin-lsstcam-calibs/",
+    "refcats": "s3://slac@rubin-refcats/",
+    "raw": "s3://slac@rubin-lsstcam-raw/",
+}
+"""Root URIs of the USDF storage locations for DP2 data.  The full set of DP2
+data is available in these directories.
+"""
+
+RSP_GCS_DATASTORE_PATHS = {
+    "dp2": "s3://butler-us-central1-dp2/dp2/",
+    "refcats": "s3://butler-us-central1-dp2/refcats/",
+    # There are currently no calibs or raws in the DP2 GCS bucket, but these
+    # locations are where the upload script would put them, if someone changes
+    # the requirements later.
+    "calib": "s3://butler-us-central1-dp2/calib/",
+    "raw": "s3://butler-us-central1-dp2/raw/",
+}
+"""Root URIs of the Google Cloud Storage locations for DP2 data.  Only the
+"early"/"mini" subset of DP2 was copied to these locations.
 """
 
 
@@ -100,16 +125,22 @@ def _generate_file_datastore_config(datastore_name: str) -> dict:
     }
 
 
-def map_table_to_rsp_datastores(table: DatastoreRecordTable) -> DatastoreRecordTable:
-    """Convert the absolute paths in the datastore dump to relative paths,
-    splitting the datasets up among multiple Butler datastores.  Each of these
-    datastores corresponds to an S3 bucket that will serve the files to end
-    users.
+def map_table_to_rsp_datastores(dataset_type: str, table: DatastoreRecordTable) -> DatastoreRecordTable:
+    """Convert the absolute USDF paths in the datastore dump to absolute paths
+    reachable from the Google RSP.  Depending on dataset type, some files are
+    stored in Google Cloud Storage while others are served via Weka S3 from
+    USDF.
 
-    This is the configuration used by the Google Rubin Science Platform for
-    end-users.
+    This is the configuration used by the Rubin Science Platform for end users
+    on Google Cloud.
     """
-    return map_absolute_uris_to_datastores(table, DP2_DATASTORE_MAP)
+    if is_in_dp2_mini_subset(dataset_type):
+        map = RSP_GCS_DATASTORE_PATHS
+    else:
+        map = RSP_USDF_S3_DATASTORE_PATHS
+
+    relative_paths = map_absolute_uris_to_datastores(table, DP2_DATASTORE_MAP)
+    return AbsolutePathMapper(map, "dp2").make_paths_absolute(relative_paths)
 
 
 USDF_DATASTORE_NAME = "dp2"
@@ -119,7 +150,7 @@ def generate_usdf_datastore_config() -> dict:
     return _generate_file_datastore_config(USDF_DATASTORE_NAME)
 
 
-def map_table_for_usdf(table: DatastoreRecordTable) -> DatastoreRecordTable:
+def map_table_for_usdf(dataset_type: str, table: DatastoreRecordTable) -> DatastoreRecordTable:
     """
     Modify the datastore dump to assign all files to a single datastore
     matching the default Butler datastore configuration.  Paths are left
@@ -150,7 +181,7 @@ def generate_frdf_datastore_config() -> dict:
     return _generate_file_datastore_config(FRDF_DATASTORE_NAME)
 
 
-def map_table_for_frdf(table: DatastoreRecordTable) -> DatastoreRecordTable:
+def map_table_for_frdf(dataset_type: str, table: DatastoreRecordTable) -> DatastoreRecordTable:
     """
     Modify the datastore dump to assign all files to a single datastore
     matching the default Butler datastore configuration.  Paths are left
