@@ -1,8 +1,9 @@
 import asyncio
+from collections import defaultdict
 
 import click
 
-from lsst.daf.butler import Butler, CollectionType
+from lsst.daf.butler import Butler, CollectionType, DatasetId
 
 from ..parquet.datasets import read_dataset_ids
 
@@ -34,8 +35,12 @@ def fix_associations(backup_repo: str, target_repo: str, dataset_file: str) -> N
                             [], dataset_fields={dataset_type: {"dataset_id", "collection"}}, find_first=False
                         )
                     )
+                    collection_key = f"{dataset_type}.collection"
+                    dataset_id_key = f"{dataset_type}.dataset_id"
+                    associations = defaultdict[str, set[DatasetId]](set)
                     for row in query:
-                        print(row)
+                        associations[row[collection_key]].add(row[dataset_id_key])
+                    print(associations)
 
         asyncio.run(xfer())
 
