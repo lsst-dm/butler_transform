@@ -40,7 +40,8 @@ def fix_associations(backup_repo: str, target_repo: str, dataset_type: str, data
                     associations = defaultdict[str, set[DatasetId]](set)
                     for row in query:
                         associations[row[collection_key]].add(row[dataset_id_key])
-                    print(associations)
+                    for k, v in associations.items():
+                        print(f"{k}: {len(v)}")
 
         asyncio.run(xfer())
 
