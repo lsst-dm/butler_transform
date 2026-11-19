@@ -1,3 +1,5 @@
+import asyncio
+
 import click
 
 from lsst.daf.butler import Butler, CollectionType
@@ -19,6 +21,7 @@ def fix_associations(backup_repo: str, target_repo: str, dataset_file: str) -> N
             "*", collection_types=CollectionType.TAGGED, include_summary=True
         )
         collections = [c.name for c in all_tagged_collections if dataset_type in c.dataset_types]
+        print(collections)
 
         async def xfer():
             async for ids in read_dataset_ids(dataset_file):
@@ -34,7 +37,7 @@ def fix_associations(backup_repo: str, target_repo: str, dataset_file: str) -> N
                     for row in query:
                         print(row)
 
-        print(collections)
+        asyncio.run(xfer())
 
 
 if __name__ == "__main__":
