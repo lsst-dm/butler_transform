@@ -16,7 +16,7 @@ from ..parquet.datasets import read_dataset_ids
 def fix_associations(backup_repo: str, target_repo: str, dataset_type: str, dataset_file: str) -> None:
     with (
         Butler.from_config(backup_repo) as backup_butler,
-        # Butler.from_config(target_repo, writeable=True) as target_butler,
+        Butler.from_config(target_repo, writeable=True) as target_butler,
     ):
         all_tagged_collections = backup_butler.collections.query_info(
             "*", collection_types=CollectionType.TAGGED, include_summary=True
@@ -39,8 +39,12 @@ def fix_associations(backup_repo: str, target_repo: str, dataset_type: str, data
                     associations = defaultdict[str, set[DatasetId]](set)
                     for row in query:
                         associations[row[collection_key]].add(row[dataset_id_key])
-                    for k, v in associations.items():
-                        print(f"{k}: {len(v)}")
+                    for col, dataset_ids in associations.items():
+                        refs = target_butler.get_many_datasets(dataset_ids)
+                        if len(refs) != len(dataset_ids):
+                            raise RuntimeError("Missing dataset IDs in target Butler")
+                        print(f"{col}: {len(dataset_ids)}")
+                        target_butler.registry.associate(col, refs)
 
         asyncio.run(xfer())
 
