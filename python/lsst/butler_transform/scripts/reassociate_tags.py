@@ -22,7 +22,6 @@ def fix_associations(backup_repo: str, target_repo: str, dataset_type: str, data
             "*", collection_types=CollectionType.TAGGED, include_summary=True
         )
         collections = [c.name for c in all_tagged_collections if dataset_type in c.dataset_types]
-        print(collections)
 
         async def xfer():
             async for ids in read_dataset_ids(dataset_file):
