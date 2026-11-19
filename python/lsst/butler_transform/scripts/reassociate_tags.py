@@ -29,7 +29,7 @@ def fix_associations(backup_repo: str, target_repo: str, dataset_file: str) -> N
                     x = query.expression_factory
                     query = (
                         query.join_dataset_search("raw", collections=collections)
-                        .where(x["dataset_type"].dataset_id.in_iterable(ids))
+                        .where(x[dataset_type].dataset_id.in_iterable(ids))
                         .general(
                             [], dataset_fields={dataset_type: {"dataset_id", "collection"}}, find_first=False
                         )
