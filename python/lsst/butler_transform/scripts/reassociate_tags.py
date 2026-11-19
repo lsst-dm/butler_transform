@@ -1,0 +1,53 @@
+import asyncio
+from collections import defaultdict
+
+import click
+
+from lsst.daf.butler import Butler, CollectionType, DatasetId
+
+from ..parquet.datasets import read_dataset_ids
+
+
+@click.command()
+@click.argument("backup_repo")
+@click.argument("target_repo")
+@click.argument("dataset_type")
+@click.argument("dataset_file")
+def fix_associations(backup_repo: str, target_repo: str, dataset_type: str, dataset_file: str) -> None:
+    with (
+        Butler.from_config(backup_repo) as backup_butler,
+        Butler.from_config(target_repo, writeable=True) as target_butler,
+    ):
+        all_tagged_collections = backup_butler.collections.query_info(
+            "*", collection_types=CollectionType.TAGGED, include_summary=True
+        )
+        collections = [c.name for c in all_tagged_collections if dataset_type in c.dataset_types]
+
+        async def xfer():
+            async for ids in read_dataset_ids(dataset_file):
+                with backup_butler.query() as query:
+                    x = query.expression_factory
+                    query = (
+                        query.join_dataset_search(dataset_type, collections=collections)
+                        .where(x[dataset_type].dataset_id.in_iterable(ids))
+                        .general(
+                            [], dataset_fields={dataset_type: {"dataset_id", "collection"}}, find_first=False
+                        )
+                    )
+                    collection_key = f"{dataset_type}.collection"
+                    dataset_id_key = f"{dataset_type}.dataset_id"
+                    associations = defaultdict[str, set[DatasetId]](set)
+                    for row in query:
+                        associations[row[collection_key]].add(row[dataset_id_key])
+                    for col, dataset_ids in associations.items():
+                        refs = target_butler.get_many_datasets(dataset_ids)
+                        if len(refs) != len(dataset_ids):
+                            raise RuntimeError("Missing dataset IDs in target Butler")
+                        print(f"{col}: {len(dataset_ids)}")
+                        target_butler.registry.associate(col, refs)
+
+        asyncio.run(xfer())
+
+
+if __name__ == "__main__":
+    fix_associations()
