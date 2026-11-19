@@ -11,9 +11,9 @@ from ..parquet.datasets import read_dataset_ids
 @click.command()
 @click.argument("backup_repo")
 @click.argument("target_repo")
+@click.argument("dataset_type")
 @click.argument("dataset_file")
-def fix_associations(backup_repo: str, target_repo: str, dataset_file: str) -> None:
-    dataset_type = "raw"
+def fix_associations(backup_repo: str, target_repo: str, dataset_type: str, dataset_file: str) -> None:
     with (
         Butler.from_config(backup_repo) as backup_butler,
         # Butler.from_config(target_repo, writeable=True) as target_butler,
@@ -29,7 +29,7 @@ def fix_associations(backup_repo: str, target_repo: str, dataset_file: str) -> N
                 with backup_butler.query() as query:
                     x = query.expression_factory
                     query = (
-                        query.join_dataset_search("raw", collections=collections)
+                        query.join_dataset_search(dataset_type, collections=collections)
                         .where(x[dataset_type].dataset_id.in_iterable(ids))
                         .general(
                             [], dataset_fields={dataset_type: {"dataset_id", "collection"}}, find_first=False
